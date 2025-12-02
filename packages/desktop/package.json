@@ -1,0 +1,44 @@
+{
+  "name": "print-agent-desktop",
+  "version": "1.0.0",
+  "description": "Interfaz gráfica para el agente de impresión",
+  "main": "electron/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build && electron-builder",
+    "start": "electron .",
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:${VITE_PORT:-5173} && electron .\"",
+    "electron:pack": "electron-builder"
+  },
+  "dependencies": {
+    "electron-updater": "^6.1.7"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.2.1",
+    "concurrently": "^8.2.2",
+    "electron": "^28.0.0",
+    "electron-builder": "^24.9.1",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "vite": "^5.0.8",
+    "vite-plugin-electron": "^0.15.5",
+    "wait-on": "^7.2.0"
+  },
+  "build": {
+    "appId": "com.printagent.desktop",
+    "productName": "Print Agent",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.ico"
+    }
+  }
+}
+
