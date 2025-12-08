@@ -1,33 +1,20 @@
 {
   "name": "print-agent-monorepo",
   "version": "1.0.0",
-  "description": "Agente de impresión térmica con interfaz gráfica - Monorepo",
+  "description": "Agente de impresión térmica - Monorepo",
   "private": true,
   "workspaces": [
     "packages/agent",
     "packages/desktop"
   ],
   "scripts": {
+    "desktop:dev": "cd packages/desktop && npm run dev",
+    "desktop:build": "cd packages/desktop && npm run build",
+    "desktop:install": "cd packages/desktop && npm install",
     "agent:start": "npm run start --workspace=packages/agent",
     "agent:dev": "npm run dev --workspace=packages/agent",
-    "agent:stop": "powershell -File stop-agent.ps1",
-    "desktop:dev": "npm run dev --workspace=packages/desktop",
-    "desktop:electron": "npm run electron:dev --workspace=packages/desktop",
-    "desktop:build": "npm run build --workspace=packages/desktop",
-    "desktop:start": "npm run start --workspace=packages/desktop",
     "dev": "concurrently \"npm run agent:dev\" \"npm run desktop:dev\" --names \"AGENT,DESKTOP\" --prefix-colors \"blue,green\"",
-    "start": "concurrently \"npm run agent:start\" \"npm run desktop:start\" --names \"AGENT,DESKTOP\" --prefix-colors \"blue,green\"",
-    "stop": "npm run agent:stop",
-    "setup": "powershell -File setup-env.ps1",
-    "check-port": "powershell -File check-port.ps1",
-    "diagnostico": "powershell -File diagnostico-puerto.ps1",
-    "test-conexion": "node test-conexion-agente.js",
-    "list-printers": "powershell -File listar-impresoras.ps1",
-    "get-printer-id": "node obtener-id-impresora.js",
-    "config-printer": "node configurar-impresora.js",
-    "config-printer-ps": "powershell -File configurar-impresora.ps1",
-    "test-print": "node test-impresion.js",
-    "test-print-ps": "powershell -ExecutionPolicy Bypass -File test-impresion.ps1"
+    "start": "npm run agent:start"
   },
   "keywords": [
     "printer",

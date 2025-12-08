@@ -2,6 +2,8 @@
   "atlas-burger-printer-1": {
     "printerId": "atlas-burger-printer-1",
     "type": "usb",
-    "printerName": "EPSON TM-T20III Receipt"
+    "printerName": "EPSON TM-T20III Receipt",
+    "port": "TMUSB001"
   }
 }
+

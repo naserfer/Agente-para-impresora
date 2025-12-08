@@ -1,25 +1,23 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
-import electron from 'vite-plugin-electron/simple';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
-// Puerto del servidor de desarrollo (default: 5173)
-const VITE_PORT = parseInt(process.env.VITE_PORT || '5173', 10);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
-  plugins: [
-    react(),
-    electron({
-      main: {
-        entry: 'electron/main.js',
-      },
-      preload: {
-        input: 'electron/preload.js',
-      },
-    }),
-  ],
+  plugins: [react()],
+  base: './',
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
   server: {
-    port: VITE_PORT,
-    strictPort: false, // Si el puerto está ocupado, intenta el siguiente
+    port: 5173,
+  },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
   },
 });
-

@@ -14,12 +14,73 @@
  * - Envía los comandos a la impresora física
  */
 
+// IMPORTANTE: Configurar WebSocket globalmente ANTES de importar Supabase
+// Esto resuelve problemas de timeout en Node.js con Supabase Realtime
+const WebSocket = require('ws');
+if (typeof global !== 'undefined' && !global.WebSocket) {
+  global.WebSocket = WebSocket;
+}
+
 const express = require('express');
 const cors = require('cors');
 const config = require('./config');
 const logger = require('./logger');
 const printerManager = require('./printer/PrinterManager');
 const TicketGenerator = require('./printer/TicketGenerator');
+// const tunnelManager = require('./tunnel-manager'); // Deshabilitado - usando Supabase Realtime
+const supabaseListener = require('./supabase-listener');
+
+// Almacenar historial de pedidos impresos (en memoria, últimos 100)
+const printHistory = [];
+const MAX_HISTORY = 100;
+
+// Exponer globalmente para que supabase-listener pueda agregar entradas
+if (typeof global !== 'undefined') {
+  global.printHistory = printHistory;
+  global.MAX_HISTORY = MAX_HISTORY;
+}
+
+// Iniciar proxy CORS automáticamente (para túneles)
+let corsProxyProcess = null;
+function startCorsProxy() {
+  // Solo iniciar si no está corriendo ya
+  if (corsProxyProcess) {
+    logger.info('Proxy CORS ya está corriendo', { service: 'print-agent' });
+    return;
+  }
+
+  try {
+    logger.info('Iniciando proxy CORS en puerto 3002...', { service: 'print-agent' });
+    const { spawn } = require('child_process');
+    const path = require('path');
+    
+    corsProxyProcess = spawn('node', [path.join(__dirname, 'cors-proxy.js')], {
+      stdio: 'inherit',
+      shell: true,
+      windowsHide: true
+    });
+
+    corsProxyProcess.on('error', (error) => {
+      logger.error(`Error al iniciar proxy CORS: ${error.message}`, { service: 'print-agent' });
+      corsProxyProcess = null;
+    });
+
+    corsProxyProcess.on('exit', (code) => {
+      logger.warn(`Proxy CORS terminó con código ${code}`, { service: 'print-agent' });
+      corsProxyProcess = null;
+    });
+
+    // Esperar un momento para que el proxy inicie
+    setTimeout(() => {
+      if (corsProxyProcess && !corsProxyProcess.killed) {
+        logger.info('✅ Proxy CORS iniciado en puerto 3002', { service: 'print-agent' });
+      }
+    }, 2000);
+  } catch (error) {
+    logger.error(`No se pudo iniciar proxy CORS: ${error.message}`, { service: 'print-agent' });
+    logger.warn('⚠️ El túnel puede no funcionar correctamente sin el proxy CORS', { service: 'print-agent' });
+  }
+}
 
 // Crear la aplicación Express (el "servidor")
 const app = express();
@@ -28,11 +89,42 @@ const app = express();
 // CONFIGURACIÓN INICIAL
 // ============================================
 
-// CORS: Permite que tu app web (Next.js) se comunique con este agente
-// Sin esto, el navegador bloquearía las peticiones por seguridad
+// CORS: Permite que tu app web (Next.js/Vercel) se comunique con este agente
+// Middleware CORS manual para TODAS las peticiones (incluyendo OPTIONS)
+// app.use((req, res, next) => {
+//   const origin = req.headers.origin;
+  
+//   // Verificar si el origen está permitido
+//   if (!origin || config.allowedOrigins.includes('*') || config.allowedOrigins.includes(origin)) {
+//     // Agregar headers CORS a TODAS las respuestas
+//     res.header('Access-Control-Allow-Origin', origin || '*');
+//     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+//     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+//     res.header('Access-Control-Max-Age', '86400');
+    
+//     // Si es OPTIONS (preflight), responder inmediatamente
+//     if (req.method === 'OPTIONS') {
+//       logger.info(`OPTIONS (preflight) permitido para: ${origin}`);
+//       return res.sendStatus(204);
+//     }
+    
+//     next();
+//   } else {
+//     logger.warn(`CORS bloqueado para origen: ${origin}`);
+//     logger.warn(`Orígenes permitidos: ${config.allowedOrigins.join(', ')}`);
+//     res.status(403).json({ error: 'No permitido por CORS' });
+//   }
+// });
+
 app.use(cors({
-  origin: config.allowedOrigin,  // Solo acepta peticiones de esta URL (tu app Next.js)
-  credentials: true
+  origin: [
+    'https://lomiteria1-0.vercel.app', // Producción Vercel
+    /\.vercel\.app$/,                   // Cualquier subdominio de Vercel
+    ...config.allowedOrigins.filter(origin => origin !== '*'), // Orígenes configurados en .env
+  ],
+  methods: ['POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type'],
+  credentials: false
 }));
 
 // Permite recibir datos en formato JSON
@@ -61,6 +153,50 @@ app.get('/', (req, res) => {
     version: '1.0.0',
     timestamp: new Date().toISOString()
   });
+});
+
+/**
+ * RUTA: GET /api/history
+ * ¿Qué hace? Obtiene el historial de pedidos impresos
+ */
+app.get('/api/history', (req, res) => {
+  try {
+    res.json({
+      success: true,
+      data: printHistory.slice().reverse(), // Más recientes primero
+      count: printHistory.length
+    });
+  } catch (error) {
+    logger.error('Error al obtener historial:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * RUTA: GET /api/printers
+ * ¿Qué hace? Obtiene la lista de impresoras configuradas
+ */
+app.get('/api/printers', (req, res) => {
+  try {
+    const printers = Array.from(printerManager.printers.values()).map(printer => {
+      const config = printer.config || {};
+      return {
+        id: printer.id,
+        name: config.printerName || printer.id,
+        type: config.type || 'usb',
+        connected: true // Asumimos conectada si está configurada
+      };
+    });
+
+    res.json({
+      success: true,
+      data: printers,
+      count: printers.length
+    });
+  } catch (error) {
+    logger.error('Error al obtener impresoras:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 /**
@@ -446,47 +582,216 @@ app.use((err, req, res, next) => {
 });
 
 // ============================================
+// VERIFICAR PUERTO ANTES DE INICIAR
+// ============================================
+
+/**
+ * Verifica si el puerto está en uso y si es nuestro agente
+ * Si es nuestro agente, muestra un mensaje y sale gracefully
+ * Si no es nuestro agente, ofrece opciones al usuario
+ */
+async function checkPortBeforeStart() {
+  return new Promise((resolve, reject) => {
+    const http = require('http');
+    const testServer = http.createServer();
+    
+    testServer.listen(config.port, config.host, () => {
+      // El puerto está libre, podemos continuar
+      testServer.close(() => resolve(true));
+    });
+    
+    testServer.on('error', async (error) => {
+      if (error.code === 'EADDRINUSE') {
+        // El puerto está en uso, verificar si es nuestro agente
+        logger.warn(`⚠️ El puerto ${config.port} está en uso. Verificando si es nuestro agente...`, { service: 'print-agent' });
+        
+        try {
+          // Intentar hacer una petición HTTP al puerto para verificar si es nuestro agente
+          const checkRequest = http.get(`http://localhost:${config.port}/health`, { timeout: 2000 }, (res) => {
+            let data = '';
+            res.on('data', (chunk) => { data += chunk; });
+            res.on('end', () => {
+              try {
+                const health = JSON.parse(data);
+                if (health.status === 'ok' && health.service) {
+                  // Es nuestro agente
+                  logger.info(`✅ El agente ya está corriendo en el puerto ${config.port}`, { service: 'print-agent' });
+                  logger.info(`💡 Uptime: ${Math.floor(health.uptime / 60)} minutos`, { service: 'print-agent' });
+                  logger.info(`💡 Impresoras configuradas: ${health.printersCount || 0}`, { service: 'print-agent' });
+                  logger.info(`💡 No es necesario iniciar otro agente. El agente existente seguirá funcionando.`, { service: 'print-agent' });
+                  resolve(false); // No iniciar otro servidor
+                } else {
+                  // No es nuestro agente
+                  logger.error(`❌ El puerto ${config.port} está en uso por otro proceso`, { service: 'print-agent' });
+                  logger.error(`💡 Solución 1: Detén el proceso manualmente y vuelve a intentar`, { service: 'print-agent' });
+                  logger.error(`💡 Solución 2: Usa otro puerto: PORT=3002 npm run dev`, { service: 'print-agent' });
+                  reject(new Error(`Puerto ${config.port} en uso por otro proceso`));
+                }
+              } catch (e) {
+                // No es nuestro agente (no responde con JSON válido)
+                logger.error(`❌ El puerto ${config.port} está en uso por otro proceso`, { service: 'print-agent' });
+                logger.error(`💡 Solución 1: Detén el proceso manualmente y vuelve a intentar`, { service: 'print-agent' });
+                logger.error(`💡 Solución 2: Usa otro puerto: PORT=3002 npm run dev`, { service: 'print-agent' });
+                reject(new Error(`Puerto ${config.port} en uso por otro proceso`));
+              }
+            });
+          });
+          
+          checkRequest.on('error', () => {
+            // No responde, probablemente no es nuestro agente
+            logger.error(`❌ El puerto ${config.port} está en uso pero no responde`, { service: 'print-agent' });
+            logger.error(`💡 Solución 1: Detén el proceso manualmente y vuelve a intentar`, { service: 'print-agent' });
+            logger.error(`💡 Solución 2: Usa otro puerto: PORT=3002 npm run dev`, { service: 'print-agent' });
+            reject(new Error(`Puerto ${config.port} en uso pero no responde`));
+          });
+          
+          checkRequest.on('timeout', () => {
+            checkRequest.destroy();
+            logger.error(`❌ El puerto ${config.port} está en uso pero no responde (timeout)`, { service: 'print-agent' });
+            logger.error(`💡 Solución 1: Detén el proceso manualmente y vuelve a intentar`, { service: 'print-agent' });
+            logger.error(`💡 Solución 2: Usa otro puerto: PORT=3002 npm run dev`, { service: 'print-agent' });
+            reject(new Error(`Puerto ${config.port} en uso pero no responde`));
+          });
+        } catch (err) {
+          logger.error(`❌ Error al verificar el puerto: ${err.message}`, { service: 'print-agent' });
+          reject(err);
+        }
+      } else {
+        // Otro tipo de error
+        reject(error);
+      }
+    });
+  });
+}
+
+// ============================================
 // INICIAR EL SERVIDOR
 // ============================================
 
-// Iniciar el servidor en el puerto configurado (por defecto 3001)
-// IMPORTANTE: Escuchar en 0.0.0.0 para permitir acceso desde la red local
-// Esto permite que dispositivos móviles en la misma WiFi puedan conectarse
-const server = app.listen(config.port, config.host, () => {
-  logger.info(`🚀 Agente de impresión iniciado`);
-  logger.info(`📡 Escuchando en http://${config.host}:${config.port} (accesible desde red local)`);
-  logger.info(`🌐 Origen permitido: ${config.allowedOrigin}`);
-  logger.info(`💡 Endpoint principal: POST http://[IP_PC]:${config.port}/print`);
-});
+async function startServer() {
+  try {
+    // Verificar el puerto antes de intentar iniciar
+    const canStart = await checkPortBeforeStart();
+    
+    if (!canStart) {
+      // El agente ya está corriendo, salir gracefully
+      logger.info(`✅ El agente ya está corriendo. Saliendo...`, { service: 'print-agent' });
+      process.exit(0);
+      return;
+    }
+    
+    // El puerto está libre, iniciar el servidor
+    const server = app.listen(config.port, config.host, () => {
+      logger.info(`🚀 Agente de impresión iniciado`);
+      logger.info(`📡 Escuchando en http://${config.host}:${config.port} (accesible desde red local e internet)`);
+      logger.info(`🌐 Orígenes permitidos: ${config.allowedOrigins.join(', ')}`);
+      logger.info(`💡 Endpoint principal: POST http://[IP_PUBLICA]:${config.port}/print`);
+    });
 
-// Manejo de errores al iniciar el servidor
-server.on('error', (error) => {
-  if (error.code === 'EADDRINUSE') {
-    logger.error(`❌ ERROR: El puerto ${config.port} ya está en uso`);
-    logger.error(`💡 Solución: Ejecuta 'powershell -File stop-agent.ps1' o detén el proceso manualmente`);
-    logger.error(`💡 O cambia el puerto con: PORT=3002 node server.js`);
-    process.exit(1);
-  } else {
-    logger.error('❌ Error al iniciar el servidor:', error);
+    // Manejo de errores al iniciar el servidor (por si acaso)
+    server.on('error', (error) => {
+      if (error.code === 'EADDRINUSE') {
+        logger.error(`❌ ERROR: El puerto ${config.port} ya está en uso`);
+        logger.error(`💡 Esto no debería pasar si la verificación funcionó correctamente`);
+               logger.error(`💡 Solución: Detén el proceso manualmente o cambia el puerto`);
+        logger.error(`💡 O cambia el puerto con: PORT=3002 node server.js`);
+        process.exit(1);
+      } else {
+        logger.error('❌ Error al iniciar el servidor:', error);
+        process.exit(1);
+      }
+    });
+    
+    return server;
+  } catch (error) {
+    logger.error(`❌ Error al iniciar el servidor: ${error.message}`, { service: 'print-agent' });
     process.exit(1);
   }
+}
+
+// Iniciar el servidor
+const serverPromise = startServer();
+
+// Iniciar listener de Supabase Realtime (solo si el servidor se inició correctamente)
+// Esto permite imprimir automáticamente cuando se confirma un pedido
+serverPromise.then((server) => {
+  if (!server) {
+    // El agente ya estaba corriendo, no iniciar el listener
+    return;
+  }
+  
+  if (process.env.ENABLE_SUPABASE_LISTENER !== 'false') {
+    supabaseListener.start()
+      .then(() => {
+        logger.info('✅ Impresión automática activa - Escuchando cambios en pedidos', { service: 'print-agent' });
+      })
+      .catch((error) => {
+        logger.warn(`⚠️ Impresión automática no disponible: ${error.message}`, { service: 'print-agent' });
+        logger.info('💡 El agente seguirá funcionando, pero sin impresión automática', { service: 'print-agent' });
+      });
+  }
+}).catch((error) => {
+  // Error ya manejado en startServer
 });
 
+// Túnel deshabilitado - usando Supabase Realtime (sin túneles necesarios)
+// Si necesitas túneles en el futuro, descomenta esto:
+/*
+if (process.env.AUTO_TUNNEL !== 'false') {
+  tunnelManager.startTunnel()
+      .then((tunnelUrl) => {
+        if (tunnelUrl) {
+          logger.info(`🌐 Túnel público: ${tunnelUrl}`, { service: 'print-agent' });
+        }
+      })
+      .catch((error) => {
+        // Silenciar errores de túnel
+      });
+}
+*/
+
 // Manejo de cierre graceful (cuando se detiene el servidor)
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM recibido, cerrando servidor...');
-  server.close(() => {
-    logger.info('Servidor cerrado');
+async function shutdown() {
+  logger.info('Cerrando servidor...', { service: 'print-agent' });
+  
+  // Detener listener de Supabase
+  try {
+    await supabaseListener.stop();
+  } catch (error) {
+    logger.warn(`Error al detener listener de Supabase: ${error.message}`, { service: 'print-agent' });
+  }
+  
+  // Túnel deshabilitado
+  // tunnelManager.stopTunnel();
+  
+  if (corsProxyProcess) {
+    logger.info('Deteniendo proxy CORS...', { service: 'print-agent' });
+    corsProxyProcess.kill();
+    corsProxyProcess = null;
+  }
+  
+  serverPromise.then((server) => {
+    if (server && server.listening) {
+      server.close(() => {
+        logger.info('Servidor cerrado', { service: 'print-agent' });
+        process.exit(0);
+      });
+    } else {
+      process.exit(0);
+    }
+  }).catch(() => {
     process.exit(0);
   });
+}
+
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM recibido, cerrando servidor...', { service: 'print-agent' });
+  shutdown();
 });
 
 process.on('SIGINT', () => {
-  logger.info('SIGINT recibido, cerrando servidor...');
-  server.close(() => {
-    logger.info('Servidor cerrado');
-    process.exit(0);
-  });
+  logger.info('SIGINT recibido, cerrando servidor...', { service: 'print-agent' });
+  shutdown();
 });
 
 module.exports = app;

@@ -211,6 +211,11 @@ class PrinterManager {
     
     // Cargar configuraciones guardadas al iniciar
     this.loadSavedConfigurations();
+    
+    // Si no hay impresoras cargadas, configurar automáticamente la impresora por defecto
+    if (this.printers.size === 0) {
+      this.autoConfigureDefaultPrinter();
+    }
   }
 
   /**
@@ -258,6 +263,55 @@ class PrinterManager {
     } catch (error) {
       logger.warn('Error al cargar configuraciones guardadas:', error.message);
     }
+  }
+
+  /**
+   * Configura automáticamente la impresora por defecto si no hay ninguna configurada
+   */
+  autoConfigureDefaultPrinter() {
+    try {
+      const defaultPrinterId = 'atlas-burger-printer-1';
+      const defaultPrinterName = 'EPSON TM-T20III Receipt';
+      
+      if (os.platform() === 'win32') {
+        // Verificar si la impresora existe en Windows
+        try {
+          const { execSync } = require('child_process');
+          const printerCheck = execSync(`powershell -Command "Get-Printer -Name '${defaultPrinterName}' -ErrorAction SilentlyContinue | Select-Object -First 1"`, { encoding: 'utf8' }).trim();
+          
+          if (printerCheck) {
+            // Obtener el puerto
+            let printerPort = 'TMUSB001';
+            try {
+              const portInfo = execSync(`powershell -Command "Get-Printer -Name '${defaultPrinterName}' | Select-Object -ExpandProperty PortName"`, { encoding: 'utf8' }).trim();
+              if (portInfo && portInfo.length > 0) {
+                printerPort = portInfo;
+              }
+            } catch (e) {
+              logger.warn(`No se pudo obtener el puerto, usando por defecto: ${printerPort}`);
+            }
+            
+            const device = { type: 'windows', name: defaultPrinterName, port: printerPort };
+            const config = {
+              printerId: defaultPrinterId,
+              type: 'usb',
+              printerName: defaultPrinterName,
+              port: printerPort
+            };
+            
+            this.printers.set(defaultPrinterId, { device, config });
+            this.saveConfigurations();
+            logger.info(`✅ Impresora configurada automáticamente: ${defaultPrinterId} (${defaultPrinterName})`);
+            return true;
+          }
+        } catch (e) {
+          logger.debug(`No se pudo configurar automáticamente la impresora: ${e.message}`);
+        }
+      }
+    } catch (error) {
+      logger.warn(`Error en auto-configuración de impresora: ${error.message}`);
+    }
+    return false;
   }
 
   /**

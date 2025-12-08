@@ -1,34 +1,53 @@
 {
   "name": "print-agent-desktop",
   "version": "1.0.0",
-  "description": "Interfaz gráfica para el agente de impresión",
-  "main": "electron/main.js",
+  "description": "Interfaz gráfica para configuración del agente de impresión",
+  "main": "./electron/main.js",
+  "type": "module",
   "scripts": {
-    "dev": "vite",
+    "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
+    "dev:vite": "vite",
+    "dev:electron": "wait-on http://localhost:5173 && electron .",
     "build": "vite build && electron-builder",
-    "start": "electron .",
-    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:${VITE_PORT:-5173} && electron .\"",
-    "electron:pack": "electron-builder"
+    "build:vite": "vite build",
+    "build:electron": "electron-builder",
+    "preview": "vite preview"
   },
+  "keywords": [
+    "electron",
+    "react",
+    "printer",
+    "agent"
+  ],
+  "author": "",
+  "license": "MIT",
   "dependencies": {
-    "electron-updater": "^6.1.7"
+    "@supabase/supabase-js": "^2.86.2",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.294.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tailwind-merge": "^2.6.0"
   },
   "devDependencies": {
-    "@vitejs/plugin-react": "^4.2.1",
+    "@types/react": "^18.3.27",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.4.22",
     "concurrently": "^8.2.2",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "vite": "^5.0.8",
-    "vite-plugin-electron": "^0.15.5",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.18",
+    "typescript": "^5.9.3",
+    "vite": "^5.4.21",
     "wait-on": "^7.2.0"
   },
   "build": {
-    "appId": "com.printagent.desktop",
-    "productName": "Print Agent",
+    "appId": "com.lomiteria.print-agent",
+    "productName": "Agente de Impresión",
     "directories": {
-      "output": "release"
+      "output": "dist"
     },
     "files": [
       "dist/**/*",
@@ -36,9 +55,21 @@
       "package.json"
     ],
     "win": {
-      "target": "nsis",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     }
   }
 }
-
