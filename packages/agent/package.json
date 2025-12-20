@@ -9,7 +9,9 @@
     "dev:with-gui": "concurrently \"npm run dev\" \"cd ../desktop && npm run dev\" --names \"AGENT,GUI\" --prefix-colors \"blue,green\"",
     "pm2:start": "pm2 start server.js --name print-agent",
     "pm2:stop": "pm2 stop print-agent",
-    "pm2:restart": "pm2 restart print-agent"
+    "pm2:restart": "pm2 restart print-agent",
+    "test:ticket": "node test-ticket.js",
+    "test:print": "node test-ticket.js --print"
   },
   "keywords": [
     "printer",

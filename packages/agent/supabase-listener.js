@@ -365,17 +365,22 @@ class SupabaseRealtimeListener {
         }
       }
 
-      // Obtener nombre del cliente si existe
+      // Obtener datos del cliente si existe
       let customerName = 'Cliente';
+      let deliveryAddress = null;
       if (order.cliente_id) {
         const { data: cliente } = await this.supabase
           .from('clientes')
-          .select('nombre')
+          .select('nombre, direccion')
           .eq('id', order.cliente_id)
           .single();
         
         if (cliente) {
           customerName = cliente.nombre;
+          // Si es delivery, usar la dirección del cliente
+          if (order.tipo === 'delivery' && cliente.direccion) {
+            deliveryAddress = cliente.direccion;
+          }
         }
       }
 
@@ -384,6 +389,9 @@ class SupabaseRealtimeListener {
         tableNumber: order.mesa || order.table_number || null,
         customerName: customerName,
         lomiteriaName: lomiteriaName,
+        orderType: order.tipo || 'local',
+        orderNotes: order.notas || null,
+        deliveryAddress: deliveryAddress,
         createdAt: order.created_at || new Date().toISOString(),
         items: (items || []).map(item => ({
           name: item.producto_nombre || item.nombre || 'Producto',

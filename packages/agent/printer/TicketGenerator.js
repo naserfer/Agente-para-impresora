@@ -59,54 +59,147 @@ class TicketGenerator {
 
     device.open(() => {
       // Seleccionar tabla de caracteres CP850 (ESC t 1)
-      // Esto asegura que la impresora use la codificación correcta
       const esc = Buffer.from([0x1B, 0x74, 0x01]); // ESC t 1 = CP850
       device.write(esc, () => {});
       
-      // Encabezado: Solo número de orden GRANDE
+      // ========================================
+      // ENCABEZADO: Nombre del local centrado
+      // ========================================
+      const lomiteriaName = orderData.lomiteriaName || 'COCINA';
       printer
         .encode('CP850')
         .align('ct')
-        .size(3, 3)  // Texto MUY grande para el número
-        .text(toCP850(`#${orderData.orderId || orderData.numeroPedido || 'N/A'}\n`))
+        .size(2, 2)
+        .style('B')
+        .text(toCP850(`${lomiteriaName}\n`))
+        .style('NORMAL')
         .size(1, 1)
-        .text(toCP850('================================\n'))  // Usar = en lugar de ━
+        .text(toCP850('------------------------\n'))
+        .feed(1);
+
+      // ========================================
+      // NÚMERO DE ORDEN MUY GRANDE
+      // ========================================
+      printer
+        .align('ct')
+        .size(3, 3)
+        .style('B')
+        .text(toCP850(`#${orderData.orderId || orderData.numeroPedido || 'N/A'}\n`))
+        .style('NORMAL')
+        .size(1, 1)
+        .feed(1);
+
+      // ========================================
+      // TIPO DE PEDIDO (DESTACADO)
+      // ========================================
+      let tipoPedido = 'LOCAL';
+      if (orderData.orderType || orderData.tipo) {
+        const tipo = (orderData.orderType || orderData.tipo || '').toLowerCase();
+        if (tipo === 'delivery' || tipo === 'entrega') {
+          tipoPedido = 'DELIVERY';
+        } else if (tipo === 'takeaway' || tipo === 'para llevar' || tipo === 'retiro') {
+          tipoPedido = 'PARA LLEVAR';
+        } else if (tipo === 'dine-in' || tipo === 'local' || tipo === 'salon') {
+          tipoPedido = 'COMER AQUI';
+        } else {
+          tipoPedido = tipo.toUpperCase();
+        }
+      }
+
+      printer
+        .align('ct')
+        .size(2, 2)
+        .style('B')
+        .text(toCP850(`[ ${tipoPedido} ]\n`))
+        .style('NORMAL')
+        .size(1, 1)
+        .text(toCP850('------------------------\n'))
         .align('lt')
         .feed(1);
 
-      // Items a cocinar - formato simple y claro
-      orderData.items.forEach((item, index) => {
-        const cantidad = item.cantidad || item.quantity || 1;
+      // ========================================
+      // INFORMACIÓN ADICIONAL (Hora, Mesa, Cliente)
+      // ========================================
+      
+      // Formatear hora a HH:MM simple
+      const formatearHora = (fecha) => {
+        try {
+          const date = fecha ? new Date(fecha) : new Date();
+          const horas = date.getHours().toString().padStart(2, '0');
+          const minutos = date.getMinutes().toString().padStart(2, '0');
+          return `${horas}:${minutos}`;
+        } catch (e) {
+          return new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
+        }
+      };
+
+      const hora = formatearHora(orderData.createdAt);
+      printer.text(toCP850(`Hora: ${hora}\n`));
+
+      // Mesa o cliente si existe
+      if (orderData.tableNumber || orderData.mesa) {
+        printer
+          .style('B')
+          .text(toCP850(`Mesa: ${orderData.tableNumber || orderData.mesa}\n`))
+          .style('NORMAL');
+      }
+
+      if (orderData.customerName || orderData.cliente?.nombre) {
+        const cliente = orderData.customerName || orderData.cliente?.nombre;
+        printer.text(toCP850(`Cliente: ${cliente}\n`));
+      }
+
+      printer
+        .text(toCP850('------------------------\n'))
+        .feed(1);
+
+      // ========================================
+      // ITEMS - FORMATO TABLA PROFESIONAL
+      // Cantidad a la izquierda, Producto a la derecha
+      // Todo con mismo tamaño de letra y negrita oscura
+      // ========================================
+      
+      const items = orderData.items || [];
+
+      items.forEach((item) => {
+        const cantidad = (item.cantidad || item.quantity || 1);
         const nombre = item.nombre || item.name || 'Item';
         
-        // Cantidad en grande, nombre normal
+        // NO truncar - dejar que el texto fluya naturalmente a la siguiente línea
+        // Formato: "2x Producto" - todo en negrita oscura
         printer
-          .size(2, 1)  // Texto grande para cantidad
-          .text(toCP850(`${cantidad}x `))
-          .size(1, 1)  // Texto normal para nombre
-          .text(toCP850(`${nombre}\n`));
+          .size(1, 1)  // Tamaño normal uniforme
+          .style('B')  // TODO en negrita (cantidad y producto)
+          .text(toCP850(`${cantidad}x ${nombre}\n`))
+          .style('NORMAL');  // Volver a normal después
         
-        // Notas/personalizaciones si las hay (más visibles)
+        // Notas/personalizaciones (indentadas, sin negrita)
         const notas = item.personalizaciones || item.notasItem || item.notes;
         if (notas) {
           printer
-            .text(toCP850(`   ! ${notas}\n`));  // Cambiar ⚠ por ! para evitar problemas
-        }
-        
-        // Separador entre items
-        if (index < orderData.items.length - 1) {
-          printer.text(toCP850('--------------------------------\n'));  // Usar - en lugar de ━
+            .text(toCP850(`   ${notas}\n`));
         }
       });
 
-      // Pie simple
+      printer
+        .text(toCP850('========================\n'))
+        .feed(1);
+
+      // ========================================
+      // NOTAS GENERALES DEL PEDIDO
+      // ========================================
+      if (orderData.orderNotes || orderData.notas) {
+        printer
+          .style('B')
+          .text(toCP850('NOTAS:\n'))
+          .style('NORMAL')
+          .text(toCP850(`${orderData.orderNotes || orderData.notas}\n`))
+          .feed(1);
+      }
+
+      // Cortar papel (mínimo espacio)
       printer
         .feed(2)
-        .text(toCP850('================================\n'))  // Usar = en lugar de ━
-        .align('ct')
-        .size(2, 1)
-        .text(toCP850('LISTO\n'))
-        .feed(3)
         .cut()
         .close();
     });

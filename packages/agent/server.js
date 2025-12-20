@@ -284,15 +284,31 @@ app.post('/api/printer/test/:printerId', async (req, res) => {
       });
     }
 
-    // Generar ticket de prueba
+    // Generar ticket de prueba con formato mejorado
     const testTicket = TicketGenerator.generateKitchenTicket({
       orderId: 'TEST',
-      lomiteriaNombre: 'PRUEBA DE CONEXIÓN',
+      lomiteriaName: 'PRUEBA DE CONEXIÓN',
+      orderType: 'local',
+      customerName: 'Cliente de Prueba',
+      createdAt: new Date().toISOString(),
       items: [
-        { nombre: 'Item de Prueba', cantidad: 1 }
+        { 
+          name: 'Hamburguesa Clásica', 
+          quantity: 2,
+          notes: 'Sin cebolla, extra queso'
+        },
+        { 
+          name: 'Papas Fritas', 
+          quantity: 1,
+          notes: null
+        },
+        { 
+          name: 'Coca Cola', 
+          quantity: 2,
+          notes: null
+        }
       ],
-      total: 0,
-      fecha: new Date().toISOString()
+      orderNotes: 'Este es un ticket de prueba para verificar la impresora'
     });
 
     await printerManager.print(printerId, testTicket);
@@ -432,9 +448,12 @@ app.post('/print', async (req, res) => {
       const orderData = {
         orderId: data.numeroPedido?.toString() || data.orderId || 'N/A',
         tableNumber: data.mesa || data.tableNumber,
-        customerName: data.cliente?.nombre || data.customerName,
+        customerName: data.cliente?.nombre || data.customerName || 'Cliente',
         lomiteriaName: data.lomiteriaName || 'Lomitería',
-        createdAt: data.fecha || new Date().toLocaleString('es-AR'),
+        orderType: data.tipo || data.orderType || 'local',
+        orderNotes: data.notas || data.orderNotes || null,
+        deliveryAddress: data.cliente?.direccion || data.deliveryAddress || null,
+        createdAt: data.fecha || data.createdAt || new Date().toISOString(),
         items: data.items?.map(item => ({
           name: item.nombre || item.name,
           quantity: item.cantidad || item.quantity,
