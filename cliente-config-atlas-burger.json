@@ -1,0 +1,37 @@
+{
+  "cliente": {
+    "nombre": "Atlas Burger",
+    "slug": "atlas-burger",
+    "ruc": "",
+    "telefono": "",
+    "email": "",
+    "direccion": ""
+  },
+  
+  "supabase": {
+    "url": "",
+    "anonKey": "",
+    "ordersTable": "pedidos"
+  },
+  
+  "impresora": {
+    "printerId": "atlas-burger-printer-1",
+    "tipo": "usb",
+    "nombreEsperado": "EPSON TM-T20III Receipt",
+    "ubicacion": "Cocina"
+  },
+  
+  "aplicacion": {
+    "nombreApp": "Agente de Impresión - Atlas Burger",
+    "version": "1.0.0",
+    "vercelUrl": "https://lomiteria1-0.vercel.app",
+    "autoInicio": false
+  },
+  
+  "avanzado": {
+    "puerto": 3001,
+    "logLevel": "info",
+    "enableSupabaseListener": true
+  }
+}
+

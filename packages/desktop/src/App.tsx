@@ -4,15 +4,25 @@ import SupabaseConfig from './components/SupabaseConfig';
 import PrinterConfig from './components/PrinterConfig';
 import StatusPanel from './components/StatusPanel';
 import LogsViewer from './components/LogsViewer';
+import SetupWizard from './components/SetupWizard';
 
 type Tab = 'status' | 'supabase' | 'printer' | 'logs';
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('status');
+  const [showWizard, setShowWizard] = useState(false);
   const [agentStatus, setAgentStatus] = useState<{ running: boolean; health: any }>({ 
     running: false, 
     health: null 
   });
+
+  // Verificar si es la primera vez que se ejecuta
+  useEffect(() => {
+    const setupCompleted = localStorage.getItem('setup_completed');
+    if (!setupCompleted) {
+      setShowWizard(true);
+    }
+  }, []);
 
   // Log para debugging
   useEffect(() => {
@@ -124,6 +134,16 @@ function App() {
     { id: 'printer' as Tab, label: 'Impresora', icon: Printer },
     { id: 'logs' as Tab, label: 'Logs', icon: FileText },
   ];
+
+  const handleWizardComplete = (config: any) => {
+    console.log('Wizard completado con configuración:', config);
+    setShowWizard(false);
+  };
+
+  // Mostrar wizard si es la primera vez
+  if (showWizard) {
+    return <SetupWizard onComplete={handleWizardComplete} />;
+  }
 
   return (
     <div className="min-h-screen bg-gray-50">

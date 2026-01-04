@@ -2,7 +2,7 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawn } from 'child_process';
-import { existsSync } from 'fs';
+import { existsSync, writeFileSync, readFileSync } from 'fs';
 import http from 'http';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -456,6 +456,30 @@ ipcMain.handle('test-print', async (event, printerId) => {
       request.end();
     });
   } catch (error) {
+    return { success: false, error: error.message || String(error) };
+  }
+});
+
+// Guardar configuración .env
+ipcMain.handle('save-env-config', async (event, config) => {
+  try {
+    const envPath = join(__dirname, '../../agent/.env');
+    
+    // Construir contenido del .env
+    let envContent = '# Configuración del Agente de Impresión\n\n';
+    
+    for (const [key, value] of Object.entries(config)) {
+      if (value) {
+        envContent += `${key}=${value}\n`;
+      }
+    }
+    
+    // Guardar archivo
+    writeFileSync(envPath, envContent, 'utf8');
+    
+    return { success: true, message: 'Configuración guardada correctamente' };
+  } catch (error) {
+    console.error('Error saving .env:', error);
     return { success: false, error: error.message || String(error) };
   }
 });

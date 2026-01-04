@@ -1,0 +1,40 @@
+{
+  "_comment": "PLANTILLA DE CONFIGURACIÓN POR CLIENTE - Duplicar y renombrar para cada nuevo cliente",
+  "_instrucciones": "1. Copia este archivo como 'cliente-config-[nombre].json', 2. Completa los datos del cliente, 3. Usa el script de generación para crear el instalador",
+  
+  "cliente": {
+    "nombre": "Atlas Burger",
+    "slug": "atlas-burger",
+    "ruc": "",
+    "telefono": "",
+    "email": "",
+    "direccion": ""
+  },
+  
+  "supabase": {
+    "url": "https://tu-proyecto.supabase.co",
+    "anonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+    "ordersTable": "pedidos"
+  },
+  
+  "impresora": {
+    "printerId": "atlas-burger-printer-1",
+    "tipo": "usb",
+    "nombreEsperado": "EPSON TM-T20III Receipt",
+    "ubicacion": "Cocina"
+  },
+  
+  "aplicacion": {
+    "nombreApp": "Agente de Impresión - Atlas Burger",
+    "version": "1.0.0",
+    "vercelUrl": "https://lomiteria1-0.vercel.app",
+    "autoInicio": false
+  },
+  
+  "avanzado": {
+    "puerto": 3001,
+    "logLevel": "info",
+    "enableSupabaseListener": true
+  }
+}
+

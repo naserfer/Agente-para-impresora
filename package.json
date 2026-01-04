@@ -14,7 +14,9 @@
     "agent:start": "npm run start --workspace=packages/agent",
     "agent:dev": "npm run dev --workspace=packages/agent",
     "dev": "concurrently \"npm run agent:dev\" \"npm run desktop:dev\" --names \"AGENT,DESKTOP\" --prefix-colors \"blue,green\"",
-    "start": "npm run agent:start"
+    "start": "npm run agent:start",
+    "generar-sql": "node generar-sql-cliente.js",
+    "build-instalador": "node build-installer.js"
   },
   "keywords": [
     "printer",

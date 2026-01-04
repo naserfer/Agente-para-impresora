@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { CheckCircle, XCircle, Clock, Printer, RefreshCw } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Printer, RefreshCw, Play, Square, Loader } from 'lucide-react';
 
 interface StatusPanelProps {
   agentStatus: {
@@ -22,10 +22,18 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
   const [printHistory, setPrintHistory] = useState<PrintHistoryEntry[]>([]);
   const [printers, setPrinters] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [businessName, setBusinessName] = useState('');
 
   // Determinar si el agente está realmente corriendo basado en health
   const isActuallyRunning = running || (health && health.status === 'ok');
   const isRealtimeConnected = isActuallyRunning && health && health.printersCount !== undefined;
+
+  // Cargar nombre del negocio
+  useEffect(() => {
+    const name = localStorage.getItem('business_name') || 'Mi Negocio';
+    setBusinessName(name);
+  }, []);
 
   useEffect(() => {
     if (!isActuallyRunning || !window.electronAPI) return;
@@ -78,77 +86,165 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
     }
   };
 
+  const handleStartAgent = async () => {
+    if (!window.electronAPI?.startAgent) return;
+    setActionLoading(true);
+    try {
+      await window.electronAPI.startAgent();
+      // Esperar un momento para que el agente inicie
+      setTimeout(() => setActionLoading(false), 2000);
+    } catch (error) {
+      console.error('Error starting agent:', error);
+      setActionLoading(false);
+    }
+  };
+
+  const handleStopAgent = async () => {
+    if (!window.electronAPI?.stopAgent) return;
+    setActionLoading(true);
+    try {
+      await window.electronAPI.stopAgent();
+      setTimeout(() => setActionLoading(false), 1000);
+    } catch (error) {
+      console.error('Error stopping agent:', error);
+      setActionLoading(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <div className="card">
-        <h2 className="text-xl font-semibold mb-4">Estado del Sistema</h2>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Estado del Agente */}
-          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-            <div className="flex items-center space-x-3">
-              {isActuallyRunning ? (
-                <CheckCircle className="h-6 w-6 text-green-500" />
-              ) : (
-                <XCircle className="h-6 w-6 text-red-500" />
-              )}
-              <div>
-                <p className="font-medium">Agente</p>
-                <p className="text-sm text-gray-500">
-                  {isActuallyRunning ? 'Corriendo' : 'Detenido'}
-                </p>
-              </div>
-            </div>
-          </div>
+      {/* BOTÓN PRINCIPAL GRANDE - INICIAR/DETENER */}
+      <div className="card bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200">
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">
+            {businessName}
+          </h2>
+          <p className="text-gray-600 mb-6">
+            Agente de Impresión Automática
+          </p>
 
-          {/* Estado de Realtime */}
-          <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-            <div className="flex items-center space-x-3">
-              {isRealtimeConnected ? (
-                <CheckCircle className="h-6 w-6 text-green-500" />
+          {!isActuallyRunning ? (
+            <button
+              onClick={handleStartAgent}
+              disabled={actionLoading}
+              className="w-full max-w-md mx-auto bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-6 px-8 rounded-xl shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-4"
+            >
+              {actionLoading ? (
+                <>
+                  <Loader className="h-8 w-8 animate-spin" />
+                  <span className="text-2xl">Iniciando...</span>
+                </>
               ) : (
-                <XCircle className="h-6 w-6 text-red-500" />
+                <>
+                  <Play className="h-8 w-8" fill="white" />
+                  <span className="text-2xl">INICIAR AGENTE</span>
+                </>
               )}
-              <div>
-                <p className="font-medium">Supabase Realtime</p>
-                <p className="text-sm text-gray-500">
-                  {isRealtimeConnected ? 'Conectado' : 'Desconectado'}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Uptime */}
-          {health && (
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div className="flex items-center space-x-3">
-                <Clock className="h-6 w-6 text-blue-500" />
-                <div>
-                  <p className="font-medium">Tiempo Activo</p>
-                  <p className="text-sm text-gray-500">
-                    {Math.floor(health.uptime / 60)} minutos
-                  </p>
-                </div>
-              </div>
-            </div>
+            </button>
+          ) : (
+            <button
+              onClick={handleStopAgent}
+              disabled={actionLoading}
+              className="w-full max-w-md mx-auto bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-bold py-6 px-8 rounded-xl shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-4"
+            >
+              {actionLoading ? (
+                <>
+                  <Loader className="h-8 w-8 animate-spin" />
+                  <span className="text-2xl">Deteniendo...</span>
+                </>
+              ) : (
+                <>
+                  <Square className="h-8 w-8" fill="white" />
+                  <span className="text-2xl">DETENER AGENTE</span>
+                </>
+              )}
+            </button>
           )}
 
-          {/* Impresoras */}
-          {health && (
-            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-              <div className="flex items-center space-x-3">
-                <Printer className="h-6 w-6 text-purple-500" />
-                <div>
-                  <p className="font-medium">Impresoras</p>
-                  <p className="text-sm text-gray-500">
-                    {health.printersCount || 0} configurada(s)
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
+          {/* Indicador de estado visual */}
+          <div className="mt-6 flex items-center justify-center space-x-3">
+            <div className={`h-4 w-4 rounded-full ${isActuallyRunning ? 'bg-green-500 animate-pulse' : 'bg-gray-300'
+              }`} />
+            <span className={`font-semibold ${isActuallyRunning ? 'text-green-700' : 'text-gray-500'
+              }`}>
+              {isActuallyRunning ? '● ACTIVO - Imprimiendo automáticamente' : '○ INACTIVO'}
+            </span>
+          </div>
         </div>
       </div>
+
+      {/* Estado del Sistema (solo visible cuando está corriendo) */}
+      {isActuallyRunning && (
+        <div className="card">
+          <h2 className="text-xl font-semibold mb-4">Estado del Sistema</h2>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Estado del Agente */}
+            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center space-x-3">
+                {isActuallyRunning ? (
+                  <CheckCircle className="h-6 w-6 text-green-500" />
+                ) : (
+                  <XCircle className="h-6 w-6 text-red-500" />
+                )}
+                <div>
+                  <p className="font-medium">Agente</p>
+                  <p className="text-sm text-gray-500">
+                    {isActuallyRunning ? 'Corriendo' : 'Detenido'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Estado de Realtime */}
+            <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+              <div className="flex items-center space-x-3">
+                {isRealtimeConnected ? (
+                  <CheckCircle className="h-6 w-6 text-green-500" />
+                ) : (
+                  <XCircle className="h-6 w-6 text-red-500" />
+                )}
+                <div>
+                  <p className="font-medium">Supabase Realtime</p>
+                  <p className="text-sm text-gray-500">
+                    {isRealtimeConnected ? 'Conectado' : 'Desconectado'}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Uptime */}
+            {health && (
+              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                <div className="flex items-center space-x-3">
+                  <Clock className="h-6 w-6 text-blue-500" />
+                  <div>
+                    <p className="font-medium">Tiempo Activo</p>
+                    <p className="text-sm text-gray-500">
+                      {Math.floor(health.uptime / 60)} minutos
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Impresoras */}
+            {health && (
+              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
+                <div className="flex items-center space-x-3">
+                  <Printer className="h-6 w-6 text-purple-500" />
+                  <div>
+                    <p className="font-medium">Impresoras</p>
+                    <p className="text-sm text-gray-500">
+                      {health.printersCount || 0} configurada(s)
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Impresoras Configuradas */}
       {(printers.length > 0 || (health?.printers && health.printers.length > 0)) && (
@@ -195,7 +291,7 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
             <span>Actualizar</span>
           </button>
         </div>
-        
+
         {!isActuallyRunning ? (
           <div className="text-center py-8 text-gray-500">
             <p>El agente debe estar activo para ver el historial</p>

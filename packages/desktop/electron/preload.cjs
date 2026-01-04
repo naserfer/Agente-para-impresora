@@ -17,6 +17,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   listPrinters: () => ipcRenderer.invoke('list-printers'),
   testPrint: (printerId) => ipcRenderer.invoke('test-print', printerId),
   
+  // Configuration
+  saveEnvConfig: (config) => ipcRenderer.invoke('save-env-config', config),
+  
   // Listeners
   onAgentLog: (callback) => {
     ipcRenderer.on('agent-log', (event, data) => callback(data));

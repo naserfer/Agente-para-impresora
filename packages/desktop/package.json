@@ -47,12 +47,27 @@
     "appId": "com.lomiteria.print-agent",
     "productName": "Agente de Impresión",
     "directories": {
-      "output": "dist"
+      "output": "dist-installer",
+      "buildResources": "assets"
     },
     "files": [
       "dist/**/*",
-      "dist-electron/**/*",
-      "package.json"
+      "electron/**/*",
+      "package.json",
+      "!node_modules/**/*",
+      "node_modules/@supabase/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "../agent",
+        "to": "agent",
+        "filter": [
+          "**/*",
+          "!node_modules",
+          "!logs",
+          "!.env"
+        ]
+      }
     ],
     "win": {
       "target": [
@@ -61,15 +76,31 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
         }
       ],
-      "icon": "assets/icon.ico"
+      "icon": "assets/icon.png",
+      "artifactName": "${productName}-${version}-Setup.${ext}"
+    },
+    "portable": {
+      "artifactName": "${productName}-${version}-Portable.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "shortcutName": "Agente de Impresión",
+      "installerIcon": "assets/icon.png",
+      "uninstallerIcon": "assets/icon.png",
+      "installerHeaderIcon": "assets/icon.png",
+      "deleteAppDataOnUninstall": false
     }
   }
 }
