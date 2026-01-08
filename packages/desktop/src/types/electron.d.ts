@@ -14,7 +14,10 @@ export interface ElectronAPI {
   testPrint: (printerId: string) => Promise<{ success: boolean; message?: string; error?: string }>;
   onAgentLog: (callback: (data: string) => void) => void;
   onAgentStatus: (callback: (data: any) => void) => void;
+  onMainProcessLog?: (callback: (data: { message: string; level: string; timestamp: string }) => void) => void;
   removeAllListeners: (channel: string) => void;
+  saveEnvConfig: (config: any) => Promise<{ success: boolean; error?: string }>;
+  getEnvConfig: () => Promise<{ success: boolean; data?: any; error?: string }>;
 }
 
 declare global {

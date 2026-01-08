@@ -18,10 +18,15 @@ function App() {
 
   // Verificar si es la primera vez que se ejecuta
   useEffect(() => {
-    const setupCompleted = localStorage.getItem('setup_completed');
-    if (!setupCompleted) {
-      setShowWizard(true);
-    }
+    // TEMPORAL: Forzar mostrar wizard para desarrollo/ajustes estéticos
+    // Comentar la siguiente línea para volver al comportamiento normal
+    setShowWizard(true);
+    
+    // Código original (descomentar cuando termines los ajustes):
+    // const setupCompleted = localStorage.getItem('setup_completed');
+    // if (!setupCompleted) {
+    //   setShowWizard(true);
+    // }
   }, []);
 
   // Log para debugging

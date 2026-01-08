@@ -16,7 +16,39 @@
 
 // IMPORTANTE: Configurar WebSocket globalmente ANTES de importar Supabase
 // Esto resuelve problemas de timeout en Node.js con Supabase Realtime
-const WebSocket = require('ws');
+// Resolver 'ws' de forma robusta para funcionar en producción con Electron
+const path = require('path');
+const fs = require('fs');
+
+let WebSocket;
+const wsPaths = [
+  'ws', // Intento estándar
+  path.join(__dirname, 'node_modules', 'ws'), // Ruta relativa desde __dirname
+  path.join(process.cwd(), 'node_modules', 'ws'), // Ruta desde cwd
+];
+
+let wsFound = false;
+for (const wsPath of wsPaths) {
+  try {
+    if (wsPath === 'ws') {
+      WebSocket = require('ws');
+    } else if (fs.existsSync(wsPath)) {
+      WebSocket = require(wsPath);
+    } else {
+      continue;
+    }
+    wsFound = true;
+    console.log(`✅ Módulo 'ws' cargado desde: ${wsPath}`);
+    break;
+  } catch (err) {
+    continue;
+  }
+}
+
+if (!wsFound) {
+  console.error(`❌ No se pudo cargar 'ws' desde ninguna ruta:`, wsPaths);
+  throw new Error(`Cannot find module 'ws'. Tried paths: ${wsPaths.join(', ')}`);
+}
 if (typeof global !== 'undefined' && !global.WebSocket) {
   global.WebSocket = WebSocket;
 }
@@ -40,6 +72,29 @@ if (typeof global !== 'undefined') {
   global.MAX_HISTORY = MAX_HISTORY;
 }
 
+// Manejo de errores no capturados para debugging
+process.on('uncaughtException', (error) => {
+  console.error('❌ ERROR NO CAPTURADO:', error);
+  console.error('Stack:', error.stack);
+  logger.error('❌ ERROR NO CAPTURADO:', error);
+  logger.error('Stack:', error.stack);
+  // No salir inmediatamente, dar tiempo para que se registre el error
+  setTimeout(() => {
+    process.exit(1);
+  }, 1000);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('❌ PROMESA RECHAZADA NO MANEJADA:', reason);
+  if (reason instanceof Error) {
+    console.error('Stack:', reason.stack);
+    logger.error('❌ PROMESA RECHAZADA NO MANEJADA:', reason);
+    logger.error('Stack:', reason.stack);
+  } else {
+    logger.error('❌ PROMESA RECHAZADA NO MANEJADA:', reason);
+  }
+});
+
 // Iniciar proxy CORS automáticamente (para túneles)
 let corsProxyProcess = null;
 function startCorsProxy() {
@@ -54,10 +109,18 @@ function startCorsProxy() {
     const { spawn } = require('child_process');
     const path = require('path');
     
-    corsProxyProcess = spawn('node', [path.join(__dirname, 'cors-proxy.js')], {
+    // Usar process.execPath si ELECTRON_RUN_AS_NODE está configurado, sino 'node'
+    const nodeExec = process.env.ELECTRON_RUN_AS_NODE ? process.execPath : 'node';
+    const nodeArgs = process.env.ELECTRON_RUN_AS_NODE ? [path.join(__dirname, 'cors-proxy.js')] : [path.join(__dirname, 'cors-proxy.js')];
+    const corsEnv = process.env.ELECTRON_RUN_AS_NODE 
+      ? { ...process.env, ELECTRON_RUN_AS_NODE: '1' }
+      : process.env;
+    
+    corsProxyProcess = spawn(nodeExec, nodeArgs, {
       stdio: 'inherit',
-      shell: true,
-      windowsHide: true
+      shell: !process.env.ELECTRON_RUN_AS_NODE, // Solo usar shell si no es Electron
+      windowsHide: true,
+      env: corsEnv
     });
 
     corsProxyProcess.on('error', (error) => {
@@ -378,11 +441,46 @@ app.post('/api/printer/configure', async (req, res) => {
  */
 app.get('/api/printer/list-usb', async (req, res) => {
   try {
+    logger.info('Solicitud de lista de impresoras USB recibida');
     const devices = await printerManager.listUSBPrinters();
-    res.json({ success: true, devices });
+    
+    // Asegurar que devices sea un array
+    const devicesArray = Array.isArray(devices) ? devices : [];
+    logger.info(`listUSBPrinters() devolvió ${devicesArray.length} dispositivo(s)`);
+    
+    // Formatear los dispositivos para que tengan un formato consistente
+    const formattedDevices = devicesArray.map(device => {
+      // Si el dispositivo ya tiene el formato correcto, usarlo
+      if (device && typeof device === 'object') {
+        const formatted = {
+          name: device.name || device.description || device.deviceName || 'Impresora desconocida',
+          portName: device.address || device.path || device.port || device.portName || 'USB',
+          displayName: device.displayName || device.description || device.name || device.deviceName || '',
+          ...device // Mantener otras propiedades
+        };
+        logger.debug(`Dispositivo formateado: ${formatted.name} - ${formatted.portName}`);
+        return formatted;
+      }
+      // Si es un string, crear un objeto básico
+      if (typeof device === 'string') {
+        return {
+          name: device,
+          portName: 'USB',
+          displayName: device
+        };
+      }
+      return null;
+    }).filter(Boolean); // Eliminar nulls
+    
+    logger.info(`✅ Impresoras USB encontradas: ${formattedDevices.length}`, { 
+      devices: formattedDevices.map(d => ({ name: d.name, port: d.portName }))
+    });
+    
+    res.json({ success: true, devices: formattedDevices });
   } catch (error) {
-    logger.error('Error al listar impresoras USB:', error);
-    res.status(500).json({ error: error.message });
+    logger.error('❌ Error al listar impresoras USB:', error);
+    logger.error('Stack trace:', error.stack);
+    res.status(500).json({ success: false, error: error.message, devices: [] });
   }
 });
 
@@ -695,16 +793,27 @@ async function startServer() {
     if (!canStart) {
       // El agente ya está corriendo, salir gracefully
       logger.info(`✅ El agente ya está corriendo. Saliendo...`, { service: 'print-agent' });
-      process.exit(0);
+      // NO hacer exit inmediatamente, dar tiempo para que se registre el log
+      setTimeout(() => {
+        process.exit(0);
+      }, 500);
       return;
     }
     
     // El puerto está libre, iniciar el servidor
-    const server = app.listen(config.port, config.host, () => {
+    // Asegurar que escucha en 127.0.0.1 (IPv4) explícitamente para evitar problemas de IPv6
+    const listenHost = config.host || '127.0.0.1';
+    console.log(`🚀 Iniciando servidor en ${listenHost}:${config.port}...`);
+    logger.info(`🚀 Iniciando servidor en ${listenHost}:${config.port}...`, { service: 'print-agent' });
+    
+    const server = app.listen(config.port, listenHost, () => {
+      const actualAddress = server.address();
       logger.info(`🚀 Agente de impresión iniciado`);
-      logger.info(`📡 Escuchando en http://${config.host}:${config.port} (accesible desde red local e internet)`);
+      logger.info(`📡 Escuchando en http://${listenHost}:${config.port}`);
+      logger.info(`📡 Dirección real del servidor: ${JSON.stringify(actualAddress)}`);
       logger.info(`🌐 Orígenes permitidos: ${config.allowedOrigins.join(', ')}`);
-      logger.info(`💡 Endpoint principal: POST http://[IP_PUBLICA]:${config.port}/print`);
+      logger.info(`💡 Endpoint principal: POST http://127.0.0.1:${config.port}/print`);
+      console.log(`✅ SERVIDOR INICIADO CORRECTAMENTE en ${listenHost}:${config.port}`);
     });
 
     // Manejo de errores al iniciar el servidor (por si acaso)

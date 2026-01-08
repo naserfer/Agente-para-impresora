@@ -23,11 +23,22 @@
   }
   
   .btn-primary {
-    @apply bg-primary-600 text-white hover:bg-primary-700;
+    @apply bg-primary-600 text-white hover:bg-primary-700 shadow-sm;
+    text-decoration: none !important;
   }
   
   .btn-secondary {
-    @apply bg-gray-200 text-gray-900 hover:bg-gray-300;
+    @apply bg-gray-200 text-gray-900 hover:bg-gray-300 shadow-sm;
+    text-decoration: none !important;
+  }
+  
+  button {
+    text-decoration: none !important;
+  }
+  
+  a.btn-primary,
+  a.btn-secondary {
+    text-decoration: none !important;
   }
   
   .input {

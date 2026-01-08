@@ -17,10 +17,52 @@ export default function PrinterConfig() {
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   useEffect(() => {
-    loadPrinters();
-    // Cargar printerId por defecto
-    setPrinterId('atlas-burger-printer-1');
+    // Cargar configuración guardada primero
+    loadSavedConfiguration();
+    // NO cargar impresoras automáticamente - solo si no hay configuración guardada
   }, []);
+
+  const loadSavedConfiguration = async () => {
+    // Intentar cargar desde localStorage primero
+    let savedPrinterId = localStorage.getItem('printer_id');
+    let savedPrinterName = localStorage.getItem('printer_name');
+    const savedBusinessName = localStorage.getItem('business_name');
+
+    // Si no hay en localStorage, intentar cargar desde el archivo guardado en el main process
+    if (!savedPrinterName && window.electronAPI?.getEnvConfig) {
+      try {
+        const envResult = await window.electronAPI.getEnvConfig();
+        if (envResult.success && envResult.data) {
+          // El PRINTER_ID puede estar en el .env
+          if (envResult.data.PRINTER_ID && !savedPrinterId) {
+            savedPrinterId = envResult.data.PRINTER_ID;
+          }
+        }
+      } catch (error) {
+        console.log('No se pudo cargar configuración desde .env:', error);
+      }
+    }
+
+    // Establecer printerId
+    if (savedPrinterId) {
+      setPrinterId(savedPrinterId);
+    } else if (savedBusinessName) {
+      // Generar printerId por defecto basado en business name
+      const defaultId = `${savedBusinessName.toLowerCase().replace(/\s+/g, '-')}-printer-1`;
+      setPrinterId(defaultId);
+    } else {
+      // Fallback al valor por defecto
+      setPrinterId('atlas-burger-printer-1');
+    }
+
+    // Si hay una impresora guardada, seleccionarla
+    if (savedPrinterName) {
+      setSelectedPrinter(savedPrinterName);
+      // NO cargar lista automáticamente - solo si el usuario hace clic en "Actualizar lista"
+      // Esto evita la búsqueda constante cada vez que entras a la pantalla
+    }
+    // Si NO hay impresora guardada, NO cargar automáticamente - el usuario puede hacer clic en "Actualizar lista"
+  };
 
   const loadPrinters = async () => {
     if (!window.electronAPI) {
@@ -32,11 +74,19 @@ export default function PrinterConfig() {
     setLoading(true);
     try {
       const result = await window.electronAPI.listPrinters();
-      if (result.success && result.data?.printers) {
+      console.log('Resultado de listPrinters:', result);
+      if (result.success && Array.isArray(result.data)) {
+        setPrinters(result.data);
+      } else if (result.success && result.data?.printers) {
+        // Formato alternativo
         setPrinters(result.data.printers);
+      } else {
+        console.warn('No se encontraron impresoras o formato incorrecto:', result);
+        setPrinters([]);
       }
     } catch (error) {
       console.error('Error loading printers:', error);
+      setPrinters([]);
     } finally {
       setLoading(false);
     }
@@ -64,6 +114,16 @@ export default function PrinterConfig() {
       if (result.success) {
         setSaved(true);
         setTimeout(() => setSaved(false), 2000);
+        
+        // Guardar también en localStorage para persistencia
+        localStorage.setItem('printer_id', printerId);
+        localStorage.setItem('printer_name', selectedPrinter);
+        
+        // Mostrar advertencia si el agente no está disponible pero se guardó localmente
+        if (result.warning) {
+          console.warn('Advertencia:', result.warning);
+          // No mostrar alerta molesta, solo log
+        }
       } else {
         alert(`Error: ${result.error || 'No se pudo configurar la impresora'}`);
       }
@@ -138,9 +198,17 @@ export default function PrinterConfig() {
           )}
           <button
             onClick={loadPrinters}
-            className="mt-2 text-sm text-primary-600 hover:text-primary-700"
+            disabled={loading}
+            className="mt-2 text-sm text-primary-600 hover:text-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
           >
-            Actualizar lista
+            {loading ? (
+              <>
+                <Loader className="h-3 w-3 animate-spin" />
+                <span>Buscando...</span>
+              </>
+            ) : (
+              <span>Actualizar lista</span>
+            )}
           </button>
         </div>
 

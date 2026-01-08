@@ -14,20 +14,64 @@ export default function LogsViewer() {
 
     // Escuchar logs del agente
     const handleLog = (data: string) => {
-      setLogs((prev) => [...prev, data]);
+      console.log('[LogsViewer] Recibido log del agente:', data);
+      setLogs((prev) => [...prev, `[AGENT] ${data}`]);
     };
 
     const handleStatus = (data: any) => {
+      console.log('[LogsViewer] Recibido status:', data);
       setLogs((prev) => [...prev, `[STATUS] ${JSON.stringify(data)}`]);
     };
 
-    window.electronAPI.onAgentLog(handleLog);
-    window.electronAPI.onAgentStatus(handleStatus);
+    const handleMainLog = (data: any) => {
+      console.log('[LogsViewer] Recibido log del main:', data);
+      const prefix = data.level === 'error' ? '❌ [MAIN]' : data.level === 'warn' ? '⚠️ [MAIN]' : 'ℹ️ [MAIN]';
+      setLogs((prev) => [...prev, `${prefix} ${data.message}`]);
+    };
+
+    console.log('[LogsViewer] Configurando listeners...');
+    
+    // Verificar que electronAPI esté disponible
+    if (!window.electronAPI) {
+      setLogs(['[ERROR] window.electronAPI no está disponible']);
+      return;
+    }
+    
+    // Agregar log inicial
+    setLogs(['[SYSTEM] LogsViewer inicializado - Esperando logs del agente...']);
+    
+    // Configurar listeners
+    try {
+      window.electronAPI.onAgentLog(handleLog);
+      window.electronAPI.onAgentStatus(handleStatus);
+      if (window.electronAPI.onMainProcessLog) {
+        window.electronAPI.onMainProcessLog(handleMainLog);
+      }
+      console.log('[LogsViewer] Listeners configurados');
+      setLogs((prev) => [...prev, '[SYSTEM] Listeners configurados correctamente']);
+      
+      // Enviar un mensaje de prueba al proceso principal
+      setTimeout(() => {
+        setLogs((prev) => [...prev, '[SYSTEM] Enviando solicitud de prueba al proceso principal...']);
+        // Intentar obtener el estado del agente como prueba
+        window.electronAPI.getAgentStatus().then((status) => {
+          setLogs((prev) => [...prev, `[SYSTEM] ✅ Comunicación IPC funcionando - Estado: ${JSON.stringify(status)}`]);
+        }).catch((err) => {
+          setLogs((prev) => [...prev, `[SYSTEM] ❌ Error en comunicación IPC: ${err.message}`]);
+        });
+      }, 1000);
+    } catch (error: any) {
+      console.error('[LogsViewer] Error configurando listeners:', error);
+      setLogs((prev) => [...prev, `[ERROR] Error configurando listeners: ${error.message}`]);
+    }
 
     return () => {
       if (window.electronAPI) {
         window.electronAPI.removeAllListeners('agent-log');
         window.electronAPI.removeAllListeners('agent-status');
+        if (window.electronAPI.removeAllListeners) {
+          window.electronAPI.removeAllListeners('main-process-log');
+        }
       }
     };
   }, []);
@@ -88,13 +132,22 @@ export default function LogsViewer() {
         {logs.length === 0 ? (
           <div className="text-gray-500 text-center py-8">
             No hay logs aún. Los logs aparecerán aquí cuando el agente esté corriendo.
+            <br />
+            <span className="text-xs mt-2 block">Revisa la pestaña "Estado" y haz clic en "Info de Debug" para más información.</span>
           </div>
         ) : (
-          logs.map((log, index) => (
-            <div key={index} className="mb-1">
-              {log}
-            </div>
-          ))
+          logs.map((log, index) => {
+            const isError = log.includes('❌') || log.includes('[MAIN]') && log.includes('ERROR');
+            const isWarning = log.includes('⚠️') || log.includes('[MAIN]') && log.includes('WARN');
+            return (
+              <div 
+                key={index} 
+                className={`mb-1 ${isError ? 'text-red-400' : isWarning ? 'text-yellow-400' : ''}`}
+              >
+                {log}
+              </div>
+            );
+          })
         )}
         <div ref={logsEndRef} />
       </div>

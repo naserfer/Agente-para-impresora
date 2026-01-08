@@ -24,6 +24,8 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
   const [loading, setLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const [businessName, setBusinessName] = useState('');
+  const [debugInfo, setDebugInfo] = useState<any>(null);
+  const [showDebug, setShowDebug] = useState(false);
 
   // Determinar si el agente está realmente corriendo basado en health
   const isActuallyRunning = running || (health && health.status === 'ok');
@@ -111,6 +113,37 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
     }
   };
 
+  const handleRestartAgent = async () => {
+    if (!window.electronAPI) return;
+    setActionLoading(true);
+    try {
+      // Detener primero
+      if (window.electronAPI.stopAgent) {
+        await window.electronAPI.stopAgent();
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      }
+      // Luego iniciar
+      if (window.electronAPI.startAgent) {
+        await window.electronAPI.startAgent();
+        setTimeout(() => setActionLoading(false), 3000);
+      }
+    } catch (error) {
+      console.error('Error restarting agent:', error);
+      setActionLoading(false);
+    }
+  };
+
+  const loadDebugInfo = async () => {
+    if (!window.electronAPI?.getAgentDebugInfo) return;
+    try {
+      const info = await window.electronAPI.getAgentDebugInfo();
+      setDebugInfo(info);
+      setShowDebug(true);
+    } catch (error) {
+      console.error('Error loading debug info:', error);
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* BOTÓN PRINCIPAL GRANDE - INICIAR/DETENER */}
@@ -170,8 +203,58 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
               {isActuallyRunning ? '● ACTIVO - Imprimiendo automáticamente' : '○ INACTIVO'}
             </span>
           </div>
+
+          {/* Botones de acción adicionales */}
+          <div className="mt-6 flex flex-wrap justify-center gap-3">
+            <button
+              onClick={handleRestartAgent}
+              disabled={actionLoading}
+              className="btn btn-secondary flex items-center space-x-2"
+            >
+              <RefreshCw className="h-4 w-4" />
+              <span>Reiniciar Agente</span>
+            </button>
+            <button
+              onClick={loadDebugInfo}
+              className="btn btn-secondary flex items-center space-x-2"
+            >
+              <span>🔍 Info de Debug</span>
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Panel de Debug */}
+      {showDebug && debugInfo && (
+        <div className="card bg-yellow-50 border-2 border-yellow-200">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold text-yellow-900">Información de Debug</h3>
+            <button
+              onClick={() => setShowDebug(false)}
+              className="text-yellow-700 hover:text-yellow-900"
+            >
+              ✕
+            </button>
+          </div>
+          <div className="space-y-2 text-sm font-mono">
+            <div><strong>Modo:</strong> {debugInfo.isDev ? 'Desarrollo' : 'Producción'}</div>
+            <div><strong>Ruta del agente:</strong> {debugInfo.agentPath}</div>
+            <div><strong>Script del agente:</strong> {debugInfo.agentScript}</div>
+            <div className={debugInfo.agentPathExists ? 'text-green-600' : 'text-red-600'}>
+              <strong>Directorio existe:</strong> {debugInfo.agentPathExists ? '✅ Sí' : '❌ No'}
+            </div>
+            <div className={debugInfo.agentScriptExists ? 'text-green-600' : 'text-red-600'}>
+              <strong>Script existe:</strong> {debugInfo.agentScriptExists ? '✅ Sí' : '❌ No'}
+            </div>
+            <div className={debugInfo.nodeModulesExists ? 'text-green-600' : 'text-red-600'}>
+              <strong>node_modules existe:</strong> {debugInfo.nodeModulesExists ? '✅ Sí' : '❌ No'}
+            </div>
+            <div><strong>Proceso corriendo:</strong> {debugInfo.processRunning ? '✅ Sí' : '❌ No'}</div>
+            {debugInfo.processPid && <div><strong>PID:</strong> {debugInfo.processPid}</div>}
+            <div><strong>Resources Path:</strong> {debugInfo.resourcesPath}</div>
+          </div>
+        </div>
+      )}
 
       {/* Estado del Sistema (solo visible cuando está corriendo) */}
       {isActuallyRunning && (

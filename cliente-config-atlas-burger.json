@@ -7,31 +7,26 @@
     "email": "",
     "direccion": ""
   },
-  
   "supabase": {
-    "url": "",
-    "anonKey": "",
+    "url": "https://zzyjmcjrjtfudginsvin.supabase.co",
+    "anonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp6eWptY2pyanRmdWRnaW5zdmluIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjMwMDEyOTMsImV4cCI6MjA3ODU3NzI5M30.dL871RmudwY7rqm_OGmojQ7-m9uOwPEKtan9tPMriU8",
     "ordersTable": "pedidos"
   },
-  
   "impresora": {
     "printerId": "atlas-burger-printer-1",
     "tipo": "usb",
     "nombreEsperado": "EPSON TM-T20III Receipt",
     "ubicacion": "Cocina"
   },
-  
   "aplicacion": {
-    "nombreApp": "Agente de Impresión - Atlas Burger",
+    "nombreApp": "Agente de Impresion - Atlas Burger",
     "version": "1.0.0",
     "vercelUrl": "https://lomiteria1-0.vercel.app",
     "autoInicio": false
   },
-  
   "avanzado": {
     "puerto": 3001,
     "logLevel": "info",
     "enableSupabaseListener": true
   }
 }
-

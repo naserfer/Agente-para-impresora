@@ -677,11 +677,128 @@ public class RawPrinterHelper {
    */
   async listUSBPrinters() {
     try {
-      const devices = usb.findPrinter();
-      return devices || [];
+      // En Windows, usar PowerShell para obtener las impresoras instaladas
+      if (os.platform() === 'win32') {
+        return new Promise((resolve, reject) => {
+          const { exec } = require('child_process');
+          // Comando mejorado: obtener TODAS las impresoras sin filtrar por estado
+          // Usar -ErrorAction SilentlyContinue para evitar errores si no hay impresoras
+          const command = `powershell -ExecutionPolicy Bypass -Command "Get-Printer -ErrorAction SilentlyContinue | Select-Object Name, PortName, DriverName, PrinterStatus | ConvertTo-Json -Depth 3"`;
+          
+          logger.info('Ejecutando comando PowerShell para listar impresoras...');
+          
+          exec(command, { 
+            encoding: 'utf8', 
+            maxBuffer: 1024 * 1024,
+            timeout: 10000 // 10 segundos de timeout
+          }, (error, stdout, stderr) => {
+            // Log de debug
+            if (stderr && stderr.trim()) {
+              logger.warn('Stderr de PowerShell:', stderr);
+            }
+            
+            if (error) {
+              logger.error('Error al ejecutar PowerShell:', error.message);
+              logger.error('Código de error:', error.code);
+              // Si falla PowerShell, intentar con usb.findPrinter() como fallback
+              try {
+                logger.info('Intentando método alternativo con usb.findPrinter()...');
+                const devices = usb.findPrinter();
+                logger.info(`Método alternativo encontró ${devices ? devices.length : 0} dispositivos`);
+                resolve(devices || []);
+              } catch (usbError) {
+                logger.error('Error al listar impresoras USB con método alternativo:', usbError);
+                resolve([]); // Devolver array vacío en lugar de lanzar error
+              }
+              return;
+            }
+
+            try {
+              const output = stdout.trim();
+              logger.debug('Salida de PowerShell (primeros 500 chars):', output.substring(0, 500));
+              
+              if (!output || output === '') {
+                logger.warn('PowerShell no devolvió ninguna salida');
+                resolve([]);
+                return;
+              }
+
+              // PowerShell puede devolver un objeto o un array
+              let printers;
+              try {
+                printers = JSON.parse(output);
+                logger.debug('JSON parseado exitosamente');
+              } catch (parseError) {
+                logger.error('Error al parsear JSON de PowerShell:', parseError.message);
+                logger.error('Salida completa:', output);
+                // Intentar método alternativo
+                try {
+                  const devices = usb.findPrinter();
+                  logger.info(`Método alternativo encontró ${devices ? devices.length : 0} dispositivos`);
+                  resolve(devices || []);
+                } catch (usbError) {
+                  resolve([]);
+                }
+                return;
+              }
+
+              // Si es un solo objeto, convertirlo a array
+              if (!Array.isArray(printers)) {
+                printers = [printers];
+              }
+
+              logger.info(`PowerShell encontró ${printers.length} impresora(s)`);
+
+              // Formatear las impresoras para que tengan un formato consistente
+              // Filtrar impresoras virtuales comunes (PDF, Fax, etc.)
+              const virtualPrinters = ['Microsoft Print to PDF', 'Fax', 'OneNote', 'XPS', 'Send To OneNote'];
+              const formattedPrinters = printers
+                .filter(p => {
+                  if (!p || !p.Name) return false;
+                  // Filtrar impresoras virtuales
+                  const isVirtual = virtualPrinters.some(vp => p.Name.includes(vp));
+                  if (isVirtual) {
+                    logger.debug(`Filtrando impresora virtual: ${p.Name}`);
+                    return false;
+                  }
+                  return true;
+                })
+                .map(printer => {
+                  const formatted = {
+                    name: printer.Name,
+                    portName: printer.PortName || 'USB',
+                    displayName: `${printer.Name}${printer.DriverName ? ` (${printer.DriverName})` : ''}`,
+                    driverName: printer.DriverName || '',
+                    address: printer.PortName || '',
+                    path: printer.PortName || '',
+                    status: printer.PrinterStatus || 'Unknown'
+                  };
+                  logger.debug(`Impresora formateada: ${formatted.name} - Puerto: ${formatted.portName}`);
+                  return formatted;
+                });
+
+              logger.info(`Impresoras encontradas y formateadas: ${formattedPrinters.length}`);
+              if (formattedPrinters.length > 0) {
+                logger.info('Impresoras:', formattedPrinters.map(p => p.name).join(', '));
+              }
+              
+              resolve(formattedPrinters);
+            } catch (parseError) {
+              logger.error('Error al procesar impresoras de PowerShell:', parseError);
+              logger.error('Stack trace:', parseError.stack);
+              resolve([]);
+            }
+          });
+        });
+      } else {
+        // Linux/Mac: usar usb.findPrinter()
+        const devices = usb.findPrinter();
+        return devices || [];
+      }
     } catch (error) {
       logger.error('Error al listar impresoras USB:', error);
-      throw error;
+      logger.error('Stack trace:', error.stack);
+      return []; // Devolver array vacío en lugar de lanzar error
     }
   }
 

@@ -48,13 +48,13 @@ function warning(message) {
 // Leer archivo de configuración del cliente
 function loadClientConfig(clientName) {
   const configPath = path.join(__dirname, `cliente-config-${clientName}.json`);
-  
+
   if (!fs.existsSync(configPath)) {
     error(`No se encontró el archivo de configuración: ${configPath}`);
     error(`Crea primero cliente-config-${clientName}.json basado en cliente-config.template.json`);
     process.exit(1);
   }
-  
+
   try {
     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
     success(`Configuración cargada: ${config.cliente.nombre}`);
@@ -68,24 +68,24 @@ function loadClientConfig(clientName) {
 // Generar SQL personalizado
 function generateSQL(config) {
   info('Generando SQL personalizado...');
-  
+
   const template = fs.readFileSync(
     path.join(__dirname, 'packages/agent/database/atlas-burguer.sql'),
     'utf8'
   );
-  
+
   // Reemplazar valores del template
   let sql = template
     .replace(/Atlas Burger/g, config.cliente.nombre)
     .replace(/atlas-burger/g, config.cliente.slug)
     .replace(/atlas-burger-printer-1/g, config.impresora.printerId)
     .replace(/EPSON TM-T20III Receipt/g, config.impresora.nombreEsperado);
-  
+
   // Guardar SQL personalizado
   const outputPath = path.join(__dirname, `output/setup-${config.cliente.slug}.sql`);
   fs.mkdirSync(path.dirname(outputPath), { recursive: true });
   fs.writeFileSync(outputPath, sql, 'utf8');
-  
+
   success(`SQL generado: ${outputPath}`);
   return outputPath;
 }
@@ -93,7 +93,7 @@ function generateSQL(config) {
 // Generar archivo .env pre-configurado
 function generateEnv(config) {
   info('Generando archivo .env...');
-  
+
   const envContent = `# Configuración del Agente - ${config.cliente.nombre}
 # Generado automáticamente - NO editar manualmente
 
@@ -116,12 +116,22 @@ ALLOWED_ORIGINS=${config.aplicacion.vercelUrl}
 LOG_LEVEL=${config.avanzado.logLevel}
 
 # NO usar túneles con Supabase Realtime
+# NO usar túneles con Supabase Realtime
 AUTO_TUNNEL=false
+
+# Configuración Específica del Cliente (para Setup Wizard)
+PRINTER_ID=${config.impresora.printerId}
+CLIENT_NAME=${config.cliente.nombre}
 `;
-  
+
   const outputPath = path.join(__dirname, 'output/.env');
   fs.writeFileSync(outputPath, envContent, 'utf8');
-  
+
+  // COPIAR a packages/agent/.env para que se incluya en el build
+  const agentEnvPath = path.join(__dirname, 'packages/agent/.env');
+  fs.copyFileSync(outputPath, agentEnvPath);
+  success(`Archivo .env copiado a: ${agentEnvPath}`);
+
   success(`Archivo .env generado: ${outputPath}`);
   return outputPath;
 }
@@ -129,7 +139,7 @@ AUTO_TUNNEL=false
 // Generar manual de usuario
 function generateManual(config) {
   info('Generando manual de usuario...');
-  
+
   const manual = `
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
@@ -238,7 +248,7 @@ Cliente: ${config.cliente.nombre}
 
   const outputPath = path.join(__dirname, `output/MANUAL-${config.cliente.slug}.txt`);
   fs.writeFileSync(outputPath, manual, 'utf8');
-  
+
   success(`Manual generado: ${outputPath}`);
   return outputPath;
 }
@@ -246,26 +256,26 @@ Cliente: ${config.cliente.nombre}
 // Empaquetar aplicación
 function buildInstaller(config) {
   info('Empaquetando aplicación con Electron Builder...');
-  
+
   try {
     // Actualizar package.json con nombre del cliente
     const desktopPkgPath = path.join(__dirname, 'packages/desktop/package.json');
     const desktopPkg = JSON.parse(fs.readFileSync(desktopPkgPath, 'utf8'));
-    
+
     desktopPkg.build.productName = config.aplicacion.nombreApp;
     desktopPkg.version = config.aplicacion.version;
-    
+
     fs.writeFileSync(desktopPkgPath, JSON.stringify(desktopPkg, null, 2), 'utf8');
-    
+
     // Construir con electron-builder
     log('\n📦 Construyendo instalador...', 'bright');
-    execSync('npm run build --workspace=packages/desktop', { 
+    execSync('npm run build --workspace=packages/desktop', {
       stdio: 'inherit',
-      cwd: __dirname 
+      cwd: __dirname
     });
-    
+
     success('Instalador generado correctamente');
-    
+
     // Renombrar archivos con nombre del cliente
     const distPath = path.join(__dirname, 'packages/desktop/dist-installer');
     if (fs.existsSync(distPath)) {
@@ -283,7 +293,7 @@ function buildInstaller(config) {
         }
       });
     }
-    
+
   } catch (e) {
     error(`Error construyendo instalador: ${e.message}`);
     process.exit(1);
@@ -295,43 +305,43 @@ function main() {
   log('\n╔═══════════════════════════════════════════════════════════╗', 'bright');
   log('║     GENERADOR DE INSTALADOR POR CLIENTE                  ║', 'bright');
   log('╚═══════════════════════════════════════════════════════════╝\n', 'bright');
-  
+
   // Obtener nombre del cliente desde argumentos
   const clientName = process.argv[2];
-  
+
   if (!clientName) {
     error('Debes especificar el nombre del cliente');
     info('Uso: node build-installer.js [nombre-cliente]');
     info('Ejemplo: node build-installer.js atlas-burger');
     process.exit(1);
   }
-  
+
   info(`Cliente: ${clientName}\n`);
-  
+
   // 1. Cargar configuración
   const config = loadClientConfig(clientName);
-  
+
   // 2. Crear directorio de salida
   const outputDir = path.join(__dirname, 'output');
   if (!fs.existsSync(outputDir)) {
     fs.mkdirSync(outputDir, { recursive: true });
   }
-  
+
   // 3. Generar archivos
   log('\n📝 Generando archivos...', 'bright');
   const sqlPath = generateSQL(config);
   const envPath = generateEnv(config);
   const manualPath = generateManual(config);
-  
+
   // 4. Construir instalador
   log('\n🏗️  Construyendo instalador...', 'bright');
   buildInstaller(config);
-  
+
   // 5. Resumen final
   log('\n╔═══════════════════════════════════════════════════════════╗', 'bright');
   log('║              ✅ PROCESO COMPLETADO                        ║', 'bright');
   log('╚═══════════════════════════════════════════════════════════╝\n', 'bright');
-  
+
   success(`Paquete generado para: ${config.cliente.nombre}`);
   info('\n📦 Archivos generados en ./output/:');
   info(`   • Instalador Windows (.exe)`);
@@ -339,7 +349,7 @@ function main() {
   info(`   • Script SQL: setup-${config.cliente.slug}.sql`);
   info(`   • Manual: MANUAL-${config.cliente.slug}.txt`);
   info(`   • Configuración: .env (pre-configurado)`);
-  
+
   log('\n📋 Próximos pasos:', 'bright');
   info('1. Envía todos los archivos de ./output/ al cliente');
   info('2. El cliente ejecuta el instalador');
@@ -348,7 +358,7 @@ function main() {
   info(`   - Supabase Key: ${config.supabase.anonKey ? '[CONFIGURADO]' : '[POR COMPLETAR]'}`);
   info('4. Ejecuta el SQL en Supabase');
   info('5. ¡Presiona INICIAR AGENTE y listo!');
-  
+
   log('\n');
 }
 

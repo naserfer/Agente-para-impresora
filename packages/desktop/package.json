@@ -44,10 +44,12 @@
     "wait-on": "^7.2.0"
   },
   "build": {
+    "electronVersion": "28.3.3",
     "appId": "com.lomiteria.print-agent",
-    "productName": "Agente de Impresión",
+    "productName": "Agente de Impresion",
+    "afterPack": "./build-scripts/afterPack.cjs",
     "directories": {
-      "output": "dist-installer",
+      "output": "dist-installer-unlock",
       "buildResources": "assets"
     },
     "files": [
@@ -63,20 +65,15 @@
         "to": "agent",
         "filter": [
           "**/*",
-          "!node_modules",
           "!logs",
-          "!.env"
+          "!logs/**/*",
+          "!packages/**/*",
+          "!node_modules/**/*"
         ]
       }
     ],
     "win": {
       "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
         {
           "target": "portable",
           "arch": [
