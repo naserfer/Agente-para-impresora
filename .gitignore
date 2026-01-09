@@ -29,6 +29,7 @@ logs/
 # Electron
 out/
 packages/desktop/release/
+packages/desktop/dist-installer/
 packages/desktop/dist-installer-*/
 packages/desktop/dist-installer-final/
 packages/desktop/dist-installer-unlock/
