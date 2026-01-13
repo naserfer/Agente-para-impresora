@@ -21,6 +21,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Configuration
   saveEnvConfig: (config) => ipcRenderer.invoke('save-env-config', config),
   getEnvConfig: () => ipcRenderer.invoke('get-env-config'),
+  resetConfig: () => ipcRenderer.invoke('reset-config'),
+  getAutostart: () => ipcRenderer.invoke('get-autostart'),
+  setAutostart: (enabled) => ipcRenderer.invoke('set-autostart', enabled),
 
   // Listeners
   onAgentLog: (callback) => {

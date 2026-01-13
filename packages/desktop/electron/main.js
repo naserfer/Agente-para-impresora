@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawn, exec } from 'child_process';
@@ -12,6 +12,99 @@ const __dirname = dirname(__filename);
 // Mantener referencia global de la ventana
 let mainWindow;
 let agentProcess = null;
+let tray = null;
+let isQuitting = false;
+
+// Crear system tray
+function createTray() {
+  const isDev = !app.isPackaged;
+  
+  // Intentar múltiples rutas para el icono
+  let iconPath = null;
+  const possiblePaths = [
+    isDev ? join(__dirname, '../../assets/icon.png') : null,
+    join(app.getAppPath(), 'assets/icon.png'),
+    join(process.resourcesPath, '../assets/icon.png'),
+    join(process.resourcesPath, 'assets/icon.png'),
+  ].filter(Boolean);
+  
+  for (const path of possiblePaths) {
+    if (existsSync(path)) {
+      iconPath = path;
+      break;
+    }
+  }
+  
+  // Crear el icono del tray
+  let trayIcon;
+  if (iconPath) {
+    try {
+      const image = nativeImage.createFromPath(iconPath);
+      if (!image.isEmpty()) {
+        // Resize a 16x16 para el tray (Windows requiere tamaño específico)
+        trayIcon = image.resize({ width: 16, height: 16 });
+      }
+    } catch (err) {
+      console.warn('[MAIN] ⚠️ Error cargando icono del tray:', err.message);
+    }
+  }
+  
+  // Si no se pudo cargar el icono, usar uno vacío (Electron usará el icono por defecto)
+  if (!trayIcon || trayIcon.isEmpty()) {
+    trayIcon = nativeImage.createEmpty();
+  }
+  
+  tray = new Tray(trayIcon);
+  
+  const contextMenu = Menu.buildFromTemplate([
+    {
+      label: 'Mostrar ventana',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        } else {
+          createWindow();
+        }
+      }
+    },
+    {
+      label: 'Ocultar ventana',
+      click: () => {
+        if (mainWindow) {
+          mainWindow.hide();
+        }
+      }
+    },
+    { type: 'separator' },
+    {
+      label: 'Salir',
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+  
+  tray.setToolTip('Agente de Impresión');
+  tray.setContextMenu(contextMenu);
+  
+  // Click en el icono del tray muestra/oculta la ventana
+  tray.on('click', () => {
+    if (mainWindow) {
+      if (mainWindow.isVisible()) {
+        mainWindow.hide();
+      } else {
+        mainWindow.show();
+        mainWindow.focus();
+      }
+    } else {
+      createWindow();
+    }
+  });
+  
+  console.log('✅ System tray creado');
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -19,6 +112,7 @@ function createWindow() {
     height: 800,
     minWidth: 800,
     minHeight: 600,
+    show: false, // No mostrar hasta que esté listo (mejora percepción de velocidad)
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -83,16 +177,31 @@ function createWindow() {
     mainWindow = null;
   });
   
-  // Enviar log de prueba inmediatamente cuando la ventana esté lista
-  mainWindow.webContents.once('did-finish-load', () => {
-    console.log('✅ Ventana cargada, enviando log de prueba...');
+  // No cerrar la app cuando se cierra la ventana, solo esconderla
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+      console.log('🪟 Ventana escondida (app sigue corriendo en segundo plano)');
+    }
+  });
+  
+  // Mostrar ventana tan pronto como el DOM esté listo (no esperar a did-finish-load)
+  // Esto mejora significativamente la percepción de velocidad
+  mainWindow.webContents.once('dom-ready', () => {
+    console.log('✅ DOM listo - mostrando ventana inmediatamente');
     if (mainWindow && !mainWindow.isDestroyed()) {
-      // Enviar múltiples logs de prueba para verificar que funciona
+      mainWindow.show(); // Mostrar ventana tan pronto como el DOM esté listo
+    }
+  });
+  
+  // Logs adicionales cuando la página termine de cargar completamente
+  mainWindow.webContents.once('did-finish-load', () => {
+    console.log('✅ Página completamente cargada');
+    if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('agent-log', '[MAIN] ✅ Ventana cargada correctamente\n');
-      mainWindow.webContents.send('agent-log', '[MAIN] 🔧 Preparando para iniciar agente...\n');
       mainWindow.webContents.send('agent-log', '[MAIN] 📡 Sistema de logs funcionando\n');
       
-      // También enviar un log del main process
       mainWindow.webContents.send('main-process-log', { 
         message: 'Ventana cargada - Sistema listo', 
         level: 'log', 
@@ -186,10 +295,33 @@ function spawnAgentProcess() {
     return null;
   }
   
+  // Cargar variables de entorno desde userData si existe
+  const userDataEnvPath = join(app.getPath('userData'), '.env');
+  const envVars = { ...process.env };
+  
+  if (existsSync(userDataEnvPath)) {
+    try {
+      const envContent = readFileSync(userDataEnvPath, 'utf8');
+      envContent.split('\n').forEach(line => {
+        line = line.trim();
+        if (line && !line.startsWith('#') && line.includes('=')) {
+          const [key, ...valueParts] = line.split('=');
+          const value = valueParts.join('=').trim();
+          if (key && value) {
+            envVars[key.trim()] = value;
+          }
+        }
+      });
+      console.log('[MAIN] ✅ Variables de entorno cargadas desde userData');
+    } catch (error) {
+      console.warn('[MAIN] ⚠️ Error leyendo .env desde userData:', error.message);
+    }
+  }
+  
   const nodeEnv = isDev 
-    ? { ...process.env, NODE_ENV: 'production', PATH: process.env.PATH }
+    ? { ...envVars, NODE_ENV: 'production', PATH: process.env.PATH }
     : { 
-        ...process.env, 
+        ...envVars, // Incluir variables del .env de userData
         NODE_ENV: 'production', 
         ELECTRON_RUN_AS_NODE: '1', 
         PATH: process.env.PATH,
@@ -227,12 +359,21 @@ function spawnAgentProcess() {
   console.log('🔧 nodeArgs:', nodeArgs);
   console.log('🔧 agentPath:', agentPath);
   console.log('🔧 agentScript:', agentScript);
+  console.log('🔧 userDataEnvPath:', userDataEnvPath);
+  const loadedVars = Object.keys(envVars).filter(k => k.includes('SUPABASE') || k.includes('CLIENT') || k.includes('PRINTER'));
+  console.log('[MAIN] 🔧 Variables de entorno cargadas:', loadedVars.join(', '));
+  if (loadedVars.length === 0) {
+    console.warn('[MAIN] ⚠️ No se encontraron variables de entorno críticas en userData');
+  } else {
+    console.log('[MAIN] ✅ Variables críticas presentes:', loadedVars.map(k => `${k}=${envVars[k] ? '***' : 'MISSING'}`).join(', '));
+  }
   
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('agent-log', '🔧 ANTES DE SPAWN - Preparando para iniciar el proceso...\n');
     mainWindow.webContents.send('agent-log', `🔧 Comando: ${nodeCommand}\n`);
     mainWindow.webContents.send('agent-log', `🔧 Argumentos: ${nodeArgs.join(' ')}\n`);
     mainWindow.webContents.send('agent-log', `🔧 Directorio: ${agentPath}\n`);
+    mainWindow.webContents.send('agent-log', `🔧 .env en userData: ${existsSync(userDataEnvPath) ? 'SÍ' : 'NO'}\n`);
   }
 
   let childProcess;
@@ -287,7 +428,10 @@ function spawnAgentProcess() {
     console.log('[AGENT STDOUT]', message);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('agent-log', message);
-      mainWindow.webContents.send('agent-status', { running: true });
+      // Si vemos el mensaje de inicio del servidor, el agente está corriendo
+      if (message.includes('Agente de impresión iniciado') || message.includes('Escuchando en') || message.includes('SERVIDOR INICIADO')) {
+        mainWindow.webContents.send('agent-status', { running: true });
+      }
     }
   });
 
@@ -308,29 +452,19 @@ function spawnAgentProcess() {
       }
     }
   });
-  
-  // Capturar TODOS los datos de stdout para debugging
-  childProcess.stdout.on('data', (data) => {
-    const message = data.toString();
-    console.log('[AGENT STDOUT]', message);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('agent-log', message);
-      // Si vemos el mensaje de inicio del servidor, el agente está corriendo
-      if (message.includes('Agente de impresión iniciado') || message.includes('Escuchando en')) {
-        mainWindow.webContents.send('agent-status', { running: true });
-      }
-    }
-  });
 
   childProcess.on('close', (code, signal) => {
     console.log(`⚠️ Proceso del agente terminó con código ${code}, señal: ${signal}`);
     if (code !== 0 && code !== null) {
       console.error(`❌ El agente se cerró con código de error: ${code}`);
+      console.error(`❌ Esto generalmente indica un error de inicio (módulo faltante, error de sintaxis, etc.)`);
     }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('agent-log', `⚠️ Agente terminó (código: ${code}, señal: ${signal})\n`);
       if (code !== 0 && code !== null) {
-        mainWindow.webContents.send('agent-log', `❌ ERROR: El agente se cerró inesperadamente. Revisa los logs anteriores.\n`);
+        mainWindow.webContents.send('agent-log', `❌ ERROR: El agente se cerró inesperadamente (código ${code}).\n`);
+        mainWindow.webContents.send('agent-log', `💡 Revisa los logs anteriores para ver el error específico.\n`);
+        mainWindow.webContents.send('agent-log', `💡 Verifica que node_modules esté completo en: ${agentPath}\n`);
       }
       mainWindow.webContents.send('agent-status', { running: false, code, signal });
     }
@@ -390,7 +524,8 @@ function startAgent() {
 
   // Verificar si el agente ya está corriendo en el puerto 3001
   // Usar 127.0.0.1 en lugar de localhost para evitar problemas con IPv6
-  const checkRequest = http.get('http://127.0.0.1:3001/health', { timeout: 2000 }, (res) => {
+  // Reducir timeout para iniciar más rápido
+  const checkRequest = http.get('http://127.0.0.1:3001/health', { timeout: 1000 }, (res) => {
     // El agente ya está corriendo
     console.log('✅ Agente ya está corriendo en el puerto 3001');
     if (mainWindow) {
@@ -417,9 +552,11 @@ function startAgent() {
       return;
     }
     
-    // Esperar un poco antes de verificar el estado
+    // Esperar un poco antes de verificar el estado y enviar configuración
     setTimeout(() => {
       verifyAgentHealth();
+      // Si hay configuración guardada, enviarla al agente
+      sendSavedPrinterConfigToAgent();
     }, 5000); // Aumentado a 5 segundos
   });
 
@@ -441,13 +578,15 @@ function startAgent() {
       return;
     }
     
-    // Esperar un poco antes de verificar el estado
+    // Esperar un poco antes de verificar el estado y enviar configuración
     setTimeout(() => {
       verifyAgentHealth();
+      // Si hay configuración guardada, enviarla al agente
+      sendSavedPrinterConfigToAgent();
     }, 5000); // Aumentado a 5 segundos
   });
 
-  checkRequest.setTimeout(2000);
+  checkRequest.setTimeout(1000); // Reducido de 2000ms a 1000ms para iniciar más rápido
 }
 
 // IPC handler para obtener información de debug del agente
@@ -510,6 +649,103 @@ function stopAgent() {
     agentProcess.kill();
     agentProcess = null;
   }
+}
+
+// Función para enviar configuración guardada al agente cuando se inicia
+async function sendSavedPrinterConfigToAgent() {
+  try {
+    const isDevMode = !app.isPackaged;
+    const agentPath = isDevMode 
+      ? join(__dirname, '../../agent/printers-config.json')
+      : join(process.resourcesPath, 'agent/printers-config.json');
+    
+    // Intentar cargar desde el archivo del agente primero
+    if (existsSync(agentPath)) {
+      try {
+        const configData = readFileSync(agentPath, 'utf8');
+        const configs = JSON.parse(configData);
+        
+        // Enviar cada configuración al agente
+        for (const [printerId, config] of Object.entries(configs)) {
+          await sendPrinterConfigToAgent({
+            printerId,
+            type: config.type || 'usb',
+            printerName: config.printerName
+          });
+        }
+        console.log('[MAIN] ✅ Configuraciones guardadas enviadas al agente');
+        return;
+      } catch (e) {
+        console.warn('[MAIN] ⚠️ Error leyendo configuración del agente:', e.message);
+      }
+    }
+    
+    // Fallback: intentar desde userData
+    const userDataPath = join(app.getPath('userData'), 'printer-config.json');
+    if (existsSync(userDataPath)) {
+      try {
+        const configData = readFileSync(userDataPath, 'utf8');
+        const config = JSON.parse(configData);
+        await sendPrinterConfigToAgent({
+          printerId: config.printerId,
+          type: config.type || 'usb',
+          printerName: config.printerName
+        });
+        console.log('[MAIN] ✅ Configuración desde userData enviada al agente');
+      } catch (e) {
+        console.warn('[MAIN] ⚠️ Error leyendo configuración de userData:', e.message);
+      }
+    }
+  } catch (error) {
+    console.error('[MAIN] ❌ Error enviando configuración al agente:', error.message);
+  }
+}
+
+// Función auxiliar para enviar configuración al agente
+async function sendPrinterConfigToAgent(config) {
+  return new Promise((resolve) => {
+    const http = require('http');
+    const url = 'http://127.0.0.1:3001/api/printer/configure';
+    const postData = JSON.stringify(config);
+    const options = {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(postData),
+      },
+      timeout: 3000
+    };
+
+    const request = http.request(url, options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          console.log(`[MAIN] ✅ Configuración de impresora ${config.printerId} enviada al agente`);
+          resolve({ success: true, data: json });
+        } catch (e) {
+          console.warn(`[MAIN] ⚠️ Agente no respondió correctamente para ${config.printerId}`);
+          resolve({ success: false, error: 'Invalid response' });
+        }
+      });
+    });
+
+    request.on('error', (error) => {
+      console.warn(`[MAIN] ⚠️ No se pudo enviar configuración al agente: ${error.message}`);
+      resolve({ success: false, error: error.message });
+    });
+
+    request.on('timeout', () => {
+      request.destroy();
+      console.warn(`[MAIN] ⚠️ Timeout enviando configuración al agente`);
+      resolve({ success: false, error: 'Timeout' });
+    });
+
+    request.setTimeout(3000);
+    request.write(postData);
+    request.end();
+  });
 }
 
 // IPC Handlers
@@ -678,8 +914,14 @@ ipcMain.handle('get-printers-list', async () => {
 
 ipcMain.handle('configure-printer', async (event, config) => {
   try {
-    // Primero guardar localmente (no depende del agente)
-    const configPath = join(app.getPath('userData'), 'printer-config.json');
+    const isDevMode = !app.isPackaged;
+    
+    // Guardar en múltiples lugares para asegurar persistencia
+    const userDataPath = join(app.getPath('userData'), 'printer-config.json');
+    const agentPath = isDevMode 
+      ? join(__dirname, '../../agent/printers-config.json')
+      : join(process.resourcesPath, 'agent/printers-config.json');
+    
     const configData = {
       printerId: config.printerId,
       type: config.type || 'usb',
@@ -687,11 +929,38 @@ ipcMain.handle('configure-printer', async (event, config) => {
       savedAt: new Date().toISOString()
     };
     
+    // Guardar en userData (para el desktop)
     try {
-      writeFileSync(configPath, JSON.stringify(configData, null, 2), 'utf8');
-      console.log('[MAIN] ✅ Configuración de impresora guardada localmente:', configData);
+      writeFileSync(userDataPath, JSON.stringify(configData, null, 2), 'utf8');
+      console.log('[MAIN] ✅ Configuración guardada en userData:', configData);
     } catch (writeError) {
-      console.error('[MAIN] ❌ Error guardando configuración local:', writeError);
+      console.error('[MAIN] ❌ Error guardando en userData:', writeError);
+    }
+    
+    // Guardar también en el formato que el agente espera (printers-config.json)
+    try {
+      let agentConfigs = {};
+      if (existsSync(agentPath)) {
+        try {
+          const existingData = readFileSync(agentPath, 'utf8');
+          agentConfigs = JSON.parse(existingData);
+        } catch (e) {
+          console.warn('[MAIN] ⚠️ No se pudo leer configuración existente, creando nueva');
+        }
+      }
+      
+      // Agregar/actualizar la configuración de esta impresora
+      agentConfigs[config.printerId] = {
+        printerId: config.printerId,
+        type: config.type || 'usb',
+        printerName: config.printerName,
+        port: config.port || 'USB'
+      };
+      
+      writeFileSync(agentPath, JSON.stringify(agentConfigs, null, 2), 'utf8');
+      console.log('[MAIN] ✅ Configuración guardada en formato del agente:', agentPath);
+    } catch (agentWriteError) {
+      console.error('[MAIN] ❌ Error guardando en formato del agente:', agentWriteError);
     }
 
     // Intentar enviar al agente si está disponible (opcional)
@@ -762,16 +1031,24 @@ ipcMain.handle('list-printers', async () => {
         // Crear un script temporal para evitar problemas con comillas
         const tempScript = join(os.tmpdir(), `detect-printers-${Date.now()}.ps1`);
         
-        const psScript = `$printers = Get-Printer | Select-Object Name, PortName, DriverName
-$result = @()
-foreach ($p in $printers) {
-    $result += @{
-        Name = $p.Name
-        PortName = $p.PortName
-        DriverName = $p.DriverName
+        const psScript = `$ErrorActionPreference = 'Stop'
+try {
+    $printers = Get-Printer -ErrorAction SilentlyContinue | Select-Object Name, PortName, DriverName, PrinterStatus, Type
+    $result = @()
+    foreach ($p in $printers) {
+        $result += @{
+            Name = if ($p.Name) { $p.Name } else { '' }
+            PortName = if ($p.PortName) { $p.PortName } else { '' }
+            DriverName = if ($p.DriverName) { $p.DriverName } else { '' }
+            PrinterStatus = if ($p.PrinterStatus) { $p.PrinterStatus.ToString() } else { '' }
+            Type = if ($p.Type) { $p.Type.ToString() } else { '' }
+        }
     }
-}
-$result | ConvertTo-Json`;
+    $result | ConvertTo-Json -Depth 3 -Compress
+} catch {
+    Write-Error $_.Exception.Message
+    exit 1
+}`;
         
         try {
           writeFileSync(tempScript, psScript, 'utf8');
@@ -797,7 +1074,12 @@ $result | ConvertTo-Json`;
           }
           if (error) {
             console.error('[MAIN] ❌ Error ejecutando PowerShell:', error.message);
-            if (stderr) console.error('[MAIN] stderr:', stderr);
+            if (stderr) {
+              console.error('[MAIN] stderr completo:', stderr);
+            }
+            if (stdout) {
+              console.error('[MAIN] stdout (aunque hubo error):', stdout.substring(0, 500));
+            }
             // Intentar fallback: verificar si el agente está corriendo
             return tryAgentFallback(resolve);
           }
@@ -805,18 +1087,33 @@ $result | ConvertTo-Json`;
           try {
             const output = stdout.trim();
             
+            // Log completo para debugging
+            console.log('[MAIN] 📋 Output completo de PowerShell (primeros 1000 chars):', output.substring(0, 1000));
+            
             if (!output || output === '') {
-              console.warn('[MAIN] ⚠️ PowerShell no devolvió impresoras');
+              console.warn('[MAIN] ⚠️ PowerShell no devolvió impresoras (output vacío)');
+              console.warn('[MAIN] stderr (si existe):', stderr);
               return tryAgentFallback(resolve);
             }
 
             let printers;
             try {
               printers = JSON.parse(output);
+              console.log('[MAIN] ✅ JSON parseado correctamente');
             } catch (parseError) {
               console.error('[MAIN] ❌ Error parseando JSON de PowerShell:', parseError.message);
-              console.error('[MAIN] Output (primeros 200 chars):', output.substring(0, 200));
-              return tryAgentFallback(resolve);
+              console.error('[MAIN] Output completo (primeros 500 chars):', output.substring(0, 500));
+              console.error('[MAIN] Output completo (últimos 500 chars):', output.substring(Math.max(0, output.length - 500)));
+              // Intentar limpiar el output y parsear de nuevo
+              try {
+                // A veces PowerShell agrega caracteres BOM o espacios extra
+                const cleanedOutput = output.replace(/^\uFEFF/, '').trim();
+                printers = JSON.parse(cleanedOutput);
+                console.log('[MAIN] ✅ JSON parseado después de limpiar BOM');
+              } catch (retryError) {
+                console.error('[MAIN] ❌ Error en segundo intento de parseo:', retryError.message);
+                return tryAgentFallback(resolve);
+              }
             }
 
             // Si es un solo objeto, convertirlo a array
@@ -826,20 +1123,46 @@ $result | ConvertTo-Json`;
 
             console.log(`[MAIN] ✅ PowerShell encontró ${printers.length} impresora(s) sin filtrar`);
             if (printers.length > 0) {
-              console.log('[MAIN] Nombres de impresoras:', printers.map(p => p?.Name || 'sin nombre').join(', '));
+              console.log('[MAIN] 📋 Lista completa de impresoras (antes de filtrar):');
+              printers.forEach((p, idx) => {
+                console.log(`[MAIN]   ${idx + 1}. Nombre: "${p?.Name || 'sin nombre'}", Puerto: "${p?.PortName || 'N/A'}", Driver: "${p?.DriverName || 'N/A'}", Status: "${p?.PrinterStatus || 'N/A'}", Tipo: "${p?.Type || 'N/A'}"`);
+              });
             }
 
-            // Formatear y filtrar las impresoras virtuales
-            const virtualPrinters = ['Microsoft Print to PDF', 'Fax', 'OneNote', 'XPS', 'Send To OneNote', 'Root Print Queue'];
+            // Formatear y filtrar las impresoras virtuales (filtro menos agresivo)
+            // Solo filtrar si el nombre COINCIDE EXACTAMENTE o contiene palabras clave muy específicas
+            const virtualPrinters = [
+              'Microsoft Print to PDF',
+              'Fax',
+              'OneNote',
+              'XPS Document Writer',
+              'Send To OneNote',
+              'Root Print Queue'
+            ];
             const formattedPrinters = printers
               .filter(p => {
                 if (!p || !p.Name) {
+                  console.log(`[MAIN] ⏭️ Filtrando impresora sin nombre:`, p);
                   return false;
                 }
                 const name = String(p.Name).trim();
-                const isVirtual = virtualPrinters.some(vp => name.toLowerCase().includes(vp.toLowerCase()));
+                
+                // Filtrar solo si coincide exactamente o contiene palabras muy específicas
+                const isVirtual = virtualPrinters.some(vp => {
+                  const vpLower = vp.toLowerCase();
+                  const nameLower = name.toLowerCase();
+                  // Coincidencia exacta o contiene la palabra completa
+                  return nameLower === vpLower || 
+                         (nameLower.includes('pdf') && nameLower.includes('print')) ||
+                         (nameLower.includes('fax') && !nameLower.includes('epson')) ||
+                         (nameLower.includes('onenote') && !nameLower.includes('epson')) ||
+                         (nameLower === 'xps document writer');
+                });
+                
                 if (isVirtual) {
                   console.log(`[MAIN] ⏭️ Filtrando impresora virtual: ${name}`);
+                } else {
+                  console.log(`[MAIN] ✅ Manteniendo impresora: ${name} (Puerto: ${p?.PortName || 'N/A'})`);
                 }
                 return !isVirtual;
               })
@@ -973,7 +1296,11 @@ ipcMain.handle('test-print', async (event, printerId) => {
 // Guardar configuración .env
 ipcMain.handle('save-env-config', async (event, config) => {
   try {
-    const envPath = join(__dirname, '../../agent/.env');
+    const isDevMode = !app.isPackaged;
+    // Guardar en userData (siempre accesible, incluso en Program Files)
+    const userDataEnvPath = join(app.getPath('userData'), '.env');
+    // También guardar en el agente si estamos en desarrollo
+    const agentEnvPath = isDevMode ? join(__dirname, '../../agent/.env') : null;
 
     // Construir contenido del .env
     let envContent = '# Configuración del Agente de Impresión\n\n';
@@ -984,8 +1311,19 @@ ipcMain.handle('save-env-config', async (event, config) => {
       }
     }
 
-    // Guardar archivo
-    writeFileSync(envPath, envContent, 'utf8');
+    // Guardar en userData (principal)
+    writeFileSync(userDataEnvPath, envContent, 'utf8');
+    console.log('[MAIN] ✅ Configuración guardada en userData:', userDataEnvPath);
+    
+    // También guardar en agente si estamos en desarrollo
+    if (agentEnvPath) {
+      try {
+        writeFileSync(agentEnvPath, envContent, 'utf8');
+        console.log('[MAIN] ✅ Configuración también guardada en agente (dev):', agentEnvPath);
+      } catch (err) {
+        console.warn('[MAIN] ⚠️ No se pudo guardar en agente (dev):', err.message);
+      }
+    }
 
     return { success: true, message: 'Configuración guardada correctamente' };
   } catch (error) {
@@ -997,9 +1335,19 @@ ipcMain.handle('save-env-config', async (event, config) => {
 // Leer configuración .env existente
 ipcMain.handle('get-env-config', async () => {
   try {
-    const envPath = join(__dirname, '../../agent/.env');
+    const isDevMode = !app.isPackaged;
+    // Buscar primero en userData, luego en agente (dev)
+    const userDataEnvPath = join(app.getPath('userData'), '.env');
+    const agentEnvPath = isDevMode ? join(__dirname, '../../agent/.env') : null;
+    
+    let envPath = null;
+    if (existsSync(userDataEnvPath)) {
+      envPath = userDataEnvPath;
+    } else if (agentEnvPath && existsSync(agentEnvPath)) {
+      envPath = agentEnvPath;
+    }
 
-    if (!existsSync(envPath)) {
+    if (!envPath || !existsSync(envPath)) {
       return { success: false, error: 'No configuration file found' };
     }
 
@@ -1020,6 +1368,98 @@ ipcMain.handle('get-env-config', async () => {
   } catch (error) {
     console.error('Error reading .env:', error);
     return { success: false, error: error.message };
+  }
+});
+
+// Handlers para controlar autostart
+ipcMain.handle('get-autostart', async () => {
+  try {
+    const settings = app.getLoginItemSettings();
+    return { 
+      success: true, 
+      enabled: settings.openAtLogin 
+    };
+  } catch (error) {
+    console.error('[MAIN] Error obteniendo autostart:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+ipcMain.handle('set-autostart', async (event, enabled) => {
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: enabled,
+      openAsHidden: false,
+      name: 'Agente de Impresión',
+      args: []
+    });
+    console.log(`[MAIN] ✅ Autostart ${enabled ? 'habilitado' : 'deshabilitado'}`);
+    return { success: true };
+  } catch (error) {
+    console.error('[MAIN] Error configurando autostart:', error);
+    return { success: false, error: error.message };
+  }
+});
+
+// Resetear configuración (eliminar .env y localStorage)
+ipcMain.handle('reset-config', async () => {
+  try {
+    const isDevMode = !app.isPackaged;
+    // Eliminar .env de userData (principal)
+    const userDataEnvPath = join(app.getPath('userData'), '.env');
+    const printerConfigPath = join(app.getPath('userData'), 'printer-config.json');
+    
+    // También eliminar del agente si estamos en desarrollo
+    const agentEnvPath = isDevMode ? join(__dirname, '../../agent/.env') : null;
+    
+    let deleted = false;
+    
+    // Eliminar de userData (siempre intentar, incluso si falla)
+    try {
+      if (existsSync(userDataEnvPath)) {
+        unlinkSync(userDataEnvPath);
+        console.log('[MAIN] ✅ Archivo .env eliminado de userData');
+        deleted = true;
+      }
+    } catch (err) {
+      console.warn('[MAIN] ⚠️ No se pudo eliminar .env de userData:', err.message);
+    }
+    
+    // Eliminar configuración de impresora
+    try {
+      if (existsSync(printerConfigPath)) {
+        unlinkSync(printerConfigPath);
+        console.log('[MAIN] ✅ Configuración de impresora eliminada');
+      }
+    } catch (err) {
+      console.warn('[MAIN] ⚠️ No se pudo eliminar configuración de impresora:', err.message);
+    }
+    
+    // Eliminar del agente si estamos en desarrollo
+    if (agentEnvPath) {
+      try {
+        if (existsSync(agentEnvPath)) {
+          unlinkSync(agentEnvPath);
+          console.log('[MAIN] ✅ Archivo .env eliminado del agente (dev)');
+        }
+      } catch (err) {
+        console.warn('[MAIN] ⚠️ No se pudo eliminar .env del agente:', err.message);
+      }
+    }
+    
+    // Detener el agente si está corriendo
+    if (agentProcess) {
+      stopAgent();
+    }
+    
+    if (deleted) {
+      return { success: true, message: 'Configuración reseteada correctamente' };
+    } else {
+      return { success: true, message: 'No había configuración para resetear' };
+    }
+  } catch (error) {
+    console.error('[MAIN] Error reseteando configuración:', error);
+    return { success: false, error: error.message || String(error) };
   }
 });
 
@@ -1049,6 +1489,18 @@ function sendLogToRenderer(message, level = 'log') {
 // App lifecycle
 app.whenReady().then(() => {
   console.log('🚀 Aplicación iniciando...');
+  
+  // Configurar autostart (iniciar con Windows)
+  app.setLoginItemSettings({
+    openAtLogin: true,
+    openAsHidden: false, // Mostrar ventana al iniciar
+    name: 'Agente de Impresión',
+    args: []
+  });
+  
+  // Crear system tray
+  createTray();
+  
   createWindow();
   
   // Función para enviar logs de forma segura
@@ -1056,41 +1508,33 @@ app.whenReady().then(() => {
     if (mainWindow && !mainWindow.isDestroyed()) {
       try {
         mainWindow.webContents.send('agent-log', message);
-        console.log('✅ Log enviado:', message.trim());
       } catch (err) {
-        console.error('❌ Error enviando log:', err);
+        // Silenciar errores de logs durante inicio
       }
-    } else {
-      console.warn('⚠️ Ventana no disponible para enviar log:', message.trim());
     }
   };
   
-  // Esperar a que la ventana esté completamente lista antes de enviar logs
+  // Iniciar agente de forma asíncrona (no bloquear la UI)
   if (mainWindow) {
-    mainWindow.webContents.once('did-finish-load', () => {
-      // Esperar un poco más para que los listeners estén configurados
-      setTimeout(() => {
-        sendLog('[MAIN] 🚀 Aplicación iniciada\n');
-        sendLog('[MAIN] ✅ Ventana completamente cargada\n');
-        sendLog('[MAIN] 🔧 Sistema de logs activo\n');
-        
-        // Enviar logs periódicamente para verificar conectividad
-        let logCounter = 0;
-        const logInterval = setInterval(() => {
-          logCounter++;
-          sendLog(`[MAIN] ⏱️ Heartbeat ${logCounter} - ${new Date().toLocaleTimeString()}\n`);
-          
-          if (logCounter >= 10) {
-            clearInterval(logInterval);
-            sendLog('[MAIN] 🔧 Iniciando agente ahora...\n');
-            startAgent();
-          }
-        }, 500); // Cada 500ms durante 5 segundos
-      }, 1000); // Esperar 1 segundo después de did-finish-load
+    // Mostrar ventana inmediatamente cuando el DOM esté listo (no esperar a did-finish-load)
+    mainWindow.webContents.once('dom-ready', () => {
+      console.log('✅ DOM listo - mostrando ventana inmediatamente');
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.show(); // Mostrar ventana tan pronto como el DOM esté listo
+        sendLog('[MAIN] ✅ DOM listo\n');
+      }
     });
     
-    mainWindow.webContents.once('dom-ready', () => {
-      sendLog('[MAIN] ✅ DOM listo\n');
+    mainWindow.webContents.once('did-finish-load', () => {
+      sendLog('[MAIN] 🚀 Aplicación iniciada\n');
+      sendLog('[MAIN] ✅ Ventana completamente cargada\n');
+      
+      // Iniciar agente en background (no bloquear UI)
+      // Usar setTimeout con 0 para que sea asíncrono y no bloquee
+      setTimeout(() => {
+        sendLog('[MAIN] 🔧 Iniciando agente en background...\n');
+        startAgent();
+      }, 0); // Inmediato pero asíncrono
     });
   }
 
@@ -1102,12 +1546,27 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  stopAgent();
-  if (process.platform !== 'darwin') {
-    app.quit();
+  // NO cerrar la app, dejar que corra en segundo plano con el system tray
+  // Solo cerrar si isQuitting es true (usuario eligió "Salir" desde el tray)
+  if (isQuitting) {
+    stopAgent();
+    if (process.platform !== 'darwin') {
+      app.quit();
+    }
+  } else {
+    // Solo esconder la ventana, el agente sigue corriendo
+    console.log('🪟 Todas las ventanas cerradas - app sigue corriendo en segundo plano');
   }
 });
 
-app.on('before-quit', () => {
+app.on('before-quit', (event) => {
+  // Solo permitir cerrar si isQuitting es true
+  if (!isQuitting) {
+    event.preventDefault();
+    if (mainWindow) {
+      mainWindow.hide();
+    }
+    return;
+  }
   stopAgent();
 });

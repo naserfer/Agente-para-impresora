@@ -32,40 +32,12 @@ const TicketGenerator = require('./printer/TicketGenerator');
 
 class SupabaseRealtimeListener {
   constructor() {
-    // Inicializar cliente de Supabase
-    const supabaseUrl = process.env.SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_ANON_KEY;
-    
-    if (!supabaseUrl || !supabaseKey) {
-      throw new Error('SUPABASE_URL y SUPABASE_ANON_KEY son requeridos en .env');
-    }
-    
-    // Configuración mejorada para Node.js 18+ (compatible con versiones recientes de supabase-js)
-    // IMPORTANTE: Node.js 18 está deprecated. Se recomienda actualizar a Node.js 20+ o 24 LTS
-    // NOTA: Si experimentas timeouts, actualiza Node.js o usa una versión anterior de @supabase/supabase-js
-    this.supabase = createClient(supabaseUrl, supabaseKey, {
-      realtime: {
-        params: {
-          eventsPerSecond: 10
-        },
-        timeout: 60000, // 60 segundos de timeout (aumentado para Node.js 18)
-        heartbeatIntervalMs: 30000, // Heartbeat cada 30 segundos
-        reconnectAfterMs: (tries) => Math.min(tries * 1000, 30000) // Reintentos exponenciales
-      },
-      auth: {
-        persistSession: false, // No necesitamos sesión para Realtime
-        autoRefreshToken: false
-      },
-      global: {
-        headers: {
-          'apikey': supabaseKey
-        }
-      },
-      // Configuración adicional para mejorar compatibilidad
-      db: {
-        schema: 'public'
-      }
-    });
+    // NO inicializar el cliente en el constructor
+    // Las variables de entorno pueden no estar disponibles todavía
+    // Inicializar en start() cuando se llame explícitamente
+    this.supabase = null;
+    this.isConfigured = false;
+    this.configError = null;
     this.channel = null;
     this.isListening = false;
     this.processedOrders = new Set(); // Para evitar impresiones duplicadas
@@ -75,6 +47,56 @@ class SupabaseRealtimeListener {
    * Inicia la escucha de cambios en la tabla de pedidos
    */
   async start() {
+    // Leer variables de entorno EN ESTE MOMENTO (cuando se llama start())
+    // Las variables de entorno ya están disponibles porque el proceso ya fue spawnado
+    const supabaseUrl = process.env.SUPABASE_URL;
+    const supabaseKey = process.env.SUPABASE_ANON_KEY;
+    
+    // Verificar si están disponibles
+    if (!supabaseUrl || !supabaseKey) {
+      const error = new Error('SUPABASE_URL y SUPABASE_ANON_KEY son requeridos en .env');
+      this.configError = error;
+      this.isConfigured = false;
+      throw error;
+    }
+    
+    // Si el cliente no está inicializado, inicializarlo ahora
+    if (!this.supabase) {
+      try {
+        this.supabase = createClient(supabaseUrl, supabaseKey, {
+          realtime: {
+            params: {
+              eventsPerSecond: 10
+            },
+            timeout: 60000, // 60 segundos de timeout (aumentado para Node.js 18)
+            heartbeatIntervalMs: 30000, // Heartbeat cada 30 segundos
+            reconnectAfterMs: (tries) => Math.min(tries * 1000, 30000) // Reintentos exponenciales
+          },
+          auth: {
+            persistSession: false, // No necesitamos sesión para Realtime
+            autoRefreshToken: false
+          },
+          global: {
+            headers: {
+              'apikey': supabaseKey
+            }
+          },
+          // Configuración adicional para mejorar compatibilidad
+          db: {
+            schema: 'public'
+          }
+        });
+        this.isConfigured = true;
+        this.configError = null;
+        logger.info('✅ Cliente de Supabase inicializado correctamente', { service: 'supabase-listener' });
+      } catch (error) {
+        this.configError = error;
+        this.isConfigured = false;
+        logger.error(`❌ Error inicializando cliente de Supabase: ${error.message}`, { service: 'supabase-listener' });
+        throw error;
+      }
+    }
+    
     if (this.isListening) {
       logger.warn('Ya está escuchando cambios en Supabase', { service: 'supabase-listener' });
       return Promise.resolve();

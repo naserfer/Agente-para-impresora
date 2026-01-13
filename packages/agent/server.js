@@ -60,7 +60,15 @@ const logger = require('./logger');
 const printerManager = require('./printer/PrinterManager');
 const TicketGenerator = require('./printer/TicketGenerator');
 // const tunnelManager = require('./tunnel-manager'); // Deshabilitado - usando Supabase Realtime
-const supabaseListener = require('./supabase-listener');
+
+// Cargar supabase-listener de forma segura (no fallar si no hay variables de entorno)
+let supabaseListener = null;
+try {
+  supabaseListener = require('./supabase-listener');
+} catch (error) {
+  console.warn('⚠️ No se pudo cargar supabase-listener:', error.message);
+  logger.warn('⚠️ Supabase listener no disponible - el agente funcionará sin impresión automática', { service: 'print-agent' });
+}
 
 // Almacenar historial de pedidos impresos (en memoria, últimos 100)
 const printHistory = [];
@@ -848,7 +856,8 @@ serverPromise.then((server) => {
     return;
   }
   
-  if (process.env.ENABLE_SUPABASE_LISTENER !== 'false') {
+  // Solo intentar iniciar el listener si está disponible y está habilitado
+  if (supabaseListener && process.env.ENABLE_SUPABASE_LISTENER !== 'false') {
     supabaseListener.start()
       .then(() => {
         logger.info('✅ Impresión automática activa - Escuchando cambios en pedidos', { service: 'print-agent' });
@@ -857,6 +866,8 @@ serverPromise.then((server) => {
         logger.warn(`⚠️ Impresión automática no disponible: ${error.message}`, { service: 'print-agent' });
         logger.info('💡 El agente seguirá funcionando, pero sin impresión automática', { service: 'print-agent' });
       });
+  } else if (!supabaseListener) {
+    logger.warn('⚠️ Supabase listener no disponible - configura SUPABASE_URL y SUPABASE_ANON_KEY para habilitar impresión automática', { service: 'print-agent' });
   }
 }).catch((error) => {
   // Error ya manejado en startServer
@@ -882,11 +893,13 @@ if (process.env.AUTO_TUNNEL !== 'false') {
 async function shutdown() {
   logger.info('Cerrando servidor...', { service: 'print-agent' });
   
-  // Detener listener de Supabase
-  try {
-    await supabaseListener.stop();
-  } catch (error) {
-    logger.warn(`Error al detener listener de Supabase: ${error.message}`, { service: 'print-agent' });
+  // Detener listener de Supabase (solo si está disponible)
+  if (supabaseListener) {
+    try {
+      await supabaseListener.stop();
+    } catch (error) {
+      logger.warn(`Error al detener listener de Supabase: ${error.message}`, { service: 'print-agent' });
+    }
   }
   
   // Túnel deshabilitado

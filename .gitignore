@@ -33,3 +33,17 @@ packages/desktop/dist-installer/
 packages/desktop/dist-installer-*/
 packages/desktop/dist-installer-final/
 packages/desktop/dist-installer-unlock/
+
+# Binarios y ejecutables (archivos grandes)
+*.exe
+*.msi
+*.dmg
+*.pkg
+*.deb
+*.rpm
+*.AppImage
+*.blockmap
+*.zip
+win-unpacked/
+mac-unpacked/
+linux-unpacked/

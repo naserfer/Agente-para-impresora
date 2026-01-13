@@ -1,16 +1,24 @@
 import { useState, useEffect } from 'react';
-import { Printer, Settings, Activity, FileText } from 'lucide-react';
+import { Printer, Settings, Activity, FileText, RotateCcw, Code, User } from 'lucide-react';
 import SupabaseConfig from './components/SupabaseConfig';
 import PrinterConfig from './components/PrinterConfig';
 import StatusPanel from './components/StatusPanel';
 import LogsViewer from './components/LogsViewer';
 import SetupWizard from './components/SetupWizard';
+import ClientDashboard from './components/ClientDashboard';
 
 type Tab = 'status' | 'supabase' | 'printer' | 'logs';
+type Mode = 'client' | 'dev';
 
 function App() {
   const [activeTab, setActiveTab] = useState<Tab>('status');
   const [showWizard, setShowWizard] = useState(false);
+  const [wizardKey, setWizardKey] = useState(0); // Key para forzar remount del wizard
+  const [mode, setMode] = useState<Mode>(() => {
+    // Por defecto, modo cliente en producción, dev en desarrollo
+    const savedMode = localStorage.getItem('app_mode') as Mode;
+    return savedMode || 'client';
+  });
   const [agentStatus, setAgentStatus] = useState<{ running: boolean; health: any }>({ 
     running: false, 
     health: null 
@@ -18,15 +26,10 @@ function App() {
 
   // Verificar si es la primera vez que se ejecuta
   useEffect(() => {
-    // TEMPORAL: Forzar mostrar wizard para desarrollo/ajustes estéticos
-    // Comentar la siguiente línea para volver al comportamiento normal
-    setShowWizard(true);
-    
-    // Código original (descomentar cuando termines los ajustes):
-    // const setupCompleted = localStorage.getItem('setup_completed');
-    // if (!setupCompleted) {
-    //   setShowWizard(true);
-    // }
+    const setupCompleted = localStorage.getItem('setup_completed');
+    if (!setupCompleted) {
+      setShowWizard(true);
+    }
   }, []);
 
   // Log para debugging
@@ -133,21 +136,66 @@ function App() {
     };
   }, []);
 
-  const tabs = [
+  const devTabs = [
     { id: 'status' as Tab, label: 'Estado', icon: Activity },
     { id: 'supabase' as Tab, label: 'Supabase', icon: Settings },
     { id: 'printer' as Tab, label: 'Impresora', icon: Printer },
     { id: 'logs' as Tab, label: 'Logs', icon: FileText },
   ];
 
+  const clientTabs = [
+    { id: 'status' as Tab, label: 'Dashboard', icon: Activity },
+    { id: 'printer' as Tab, label: 'Impresora', icon: Printer },
+  ];
+
+  const tabs = mode === 'dev' ? devTabs : clientTabs;
+
+  const toggleMode = () => {
+    const newMode = mode === 'client' ? 'dev' : 'client';
+    setMode(newMode);
+    localStorage.setItem('app_mode', newMode);
+    // Cambiar a tab apropiado según el modo (ambos usan 'status' como id)
+    setActiveTab('status');
+  };
+
   const handleWizardComplete = (config: any) => {
     console.log('Wizard completado con configuración:', config);
     setShowWizard(false);
   };
 
+  const handleResetConfig = async () => {
+    if (!window.confirm('¿Estás seguro de que quieres resetear toda la configuración?\n\nEsto eliminará:\n- Credenciales de Supabase\n- Configuración de impresora\n- Nombre del negocio\n\nTendrás que volver a configurar todo desde cero.')) {
+      return;
+    }
+
+    try {
+      if (window.electronAPI?.resetConfig) {
+        const result = await window.electronAPI.resetConfig();
+        if (result.success) {
+          // Limpiar localStorage
+          localStorage.clear();
+          
+          // Forzar remount del wizard cambiando la key
+          setWizardKey(prev => prev + 1);
+          
+          // Asegurar que el wizard esté visible
+          setShowWizard(true);
+          
+          // Mostrar mensaje sin bloquear la UI
+          console.log('✅ Configuración reseteada. Por favor, configura nuevamente.');
+        } else {
+          alert(`❌ Error al resetear: ${result.error}`);
+        }
+      }
+    } catch (error: any) {
+      console.error('Error reseteando configuración:', error);
+      alert(`❌ Error: ${error.message}`);
+    }
+  };
+
   // Mostrar wizard si es la primera vez
   if (showWizard) {
-    return <SetupWizard onComplete={handleWizardComplete} />;
+    return <SetupWizard key={wizardKey} onComplete={handleWizardComplete} />;
   }
 
   return (
@@ -163,6 +211,29 @@ function App() {
               </h1>
             </div>
             <div className="flex items-center space-x-4">
+              {/* Toggle Modo */}
+              <button
+                onClick={toggleMode}
+                className={`flex items-center space-x-2 px-4 py-2 text-sm font-medium rounded-lg border transition-colors ${
+                  mode === 'client'
+                    ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+                    : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
+                }`}
+                title={mode === 'client' ? 'Cambiar a modo Desarrollador' : 'Cambiar a modo Cliente'}
+              >
+                {mode === 'client' ? (
+                  <>
+                    <User className="h-4 w-4" />
+                    <span>Modo Cliente</span>
+                  </>
+                ) : (
+                  <>
+                    <Code className="h-4 w-4" />
+                    <span>Modo Dev</span>
+                  </>
+                )}
+              </button>
+
               {(() => {
                 // Misma lógica que en StatusPanel
                 const isActive = agentStatus.running || 
@@ -182,6 +253,18 @@ function App() {
                   </div>
                 );
               })()}
+
+              {/* Botón Reset solo en modo Dev */}
+              {mode === 'dev' && (
+                <button
+                  onClick={handleResetConfig}
+                  className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-colors"
+                  title="Resetear configuración (para pruebas)"
+                >
+                  <RotateCcw className="h-4 w-4" />
+                  <span>Resetear Config</span>
+                </button>
+              )}
             </div>
           </div>
         </div>
@@ -214,10 +297,21 @@ function App() {
 
       {/* Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {activeTab === 'status' && <StatusPanel agentStatus={agentStatus} />}
-        {activeTab === 'supabase' && <SupabaseConfig />}
-        {activeTab === 'printer' && <PrinterConfig />}
-        {activeTab === 'logs' && <LogsViewer />}
+        {mode === 'client' ? (
+          // Modo Cliente
+          <>
+            {activeTab === 'status' && <ClientDashboard agentStatus={agentStatus} />}
+            {activeTab === 'printer' && <PrinterConfig />}
+          </>
+        ) : (
+          // Modo Dev
+          <>
+            {activeTab === 'status' && <StatusPanel agentStatus={agentStatus} />}
+            {activeTab === 'supabase' && <SupabaseConfig />}
+            {activeTab === 'printer' && <PrinterConfig />}
+            {activeTab === 'logs' && <LogsViewer />}
+          </>
+        )}
       </main>
     </div>
   );

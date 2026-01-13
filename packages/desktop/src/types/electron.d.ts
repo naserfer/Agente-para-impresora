@@ -18,6 +18,9 @@ export interface ElectronAPI {
   removeAllListeners: (channel: string) => void;
   saveEnvConfig: (config: any) => Promise<{ success: boolean; error?: string }>;
   getEnvConfig: () => Promise<{ success: boolean; data?: any; error?: string }>;
+  resetConfig: () => Promise<{ success: boolean; message?: string; error?: string }>;
+  getAutostart: () => Promise<{ success: boolean; enabled?: boolean; error?: string }>;
+  setAutostart: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
 }
 
 declare global {

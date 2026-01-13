@@ -24,7 +24,37 @@ const { exec } = require('child_process');
 const logger = require('../logger');
 
 // Archivo para persistir configuraciones de impresoras
-const PRINTERS_CONFIG_FILE = path.join(__dirname, '../../printers-config.json');
+// Si está corriendo desde Electron (en Program Files), usar userData
+// Si está en desarrollo, usar el directorio del proyecto
+let PRINTERS_CONFIG_FILE;
+if (process.env.ELECTRON_RUN_AS_NODE) {
+  // Está corriendo desde Electron, usar una ruta accesible
+  const appDataPath = process.env.APPDATA || process.env.LOCALAPPDATA || os.homedir();
+  PRINTERS_CONFIG_FILE = path.join(appDataPath, 'Agente de Impresion', 'printers-config.json');
+  
+  // Asegurar que el directorio existe
+  try {
+    const configDir = path.dirname(PRINTERS_CONFIG_FILE);
+    if (!fs.existsSync(configDir)) {
+      fs.mkdirSync(configDir, { recursive: true });
+    }
+  } catch (error) {
+    // Si falla, usar temp como fallback
+    PRINTERS_CONFIG_FILE = path.join(os.tmpdir(), 'agente-impresion', 'printers-config.json');
+    try {
+      const configDir = path.dirname(PRINTERS_CONFIG_FILE);
+      if (!fs.existsSync(configDir)) {
+        fs.mkdirSync(configDir, { recursive: true });
+      }
+    } catch (tempError) {
+      logger.warn('⚠️ No se pudo crear directorio para printers-config, usando directorio actual');
+      PRINTERS_CONFIG_FILE = path.join(__dirname, '../../printers-config.json');
+    }
+  }
+} else {
+  // Desarrollo o ejecución directa, usar directorio del proyecto
+  PRINTERS_CONFIG_FILE = path.join(__dirname, '../../printers-config.json');
+}
 
 // Función auxiliar para método alternativo de impresión en Windows
 // Usa el método de compartir impresora y copy /b (método más confiable para ESC/POS)

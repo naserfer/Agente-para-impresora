@@ -55,11 +55,15 @@ export default function PrinterConfig() {
       setPrinterId('atlas-burger-printer-1');
     }
 
-    // Si hay una impresora guardada, seleccionarla
+    // Si hay una impresora guardada, mostrarla aunque no se cargue la lista
     if (savedPrinterName) {
       setSelectedPrinter(savedPrinterName);
-      // NO cargar lista automáticamente - solo si el usuario hace clic en "Actualizar lista"
-      // Esto evita la búsqueda constante cada vez que entras a la pantalla
+      // Agregar la impresora guardada a la lista para que se muestre
+      setPrinters([{
+        name: savedPrinterName,
+        portName: 'USB' // Valor por defecto, se actualizará si se carga la lista
+      }]);
+      console.log('✅ Impresora guardada cargada:', savedPrinterName);
     }
     // Si NO hay impresora guardada, NO cargar automáticamente - el usuario puede hacer clic en "Actualizar lista"
   };
