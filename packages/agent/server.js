@@ -563,7 +563,8 @@ app.post('/print', async (req, res) => {
         items: data.items?.map(item => ({
           name: item.nombre || item.name,
           quantity: item.cantidad || item.quantity,
-          notes: item.personalizaciones || item.notes || item.notas
+          notes: item.modificaciones || item.personalizaciones || item.notes || item.notas,
+          modificaciones: item.modificaciones || item.personalizaciones || null
         })) || []
       };
 

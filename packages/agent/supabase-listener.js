@@ -354,17 +354,18 @@ class SupabaseRealtimeListener {
   }
 
   /**
-   * Convierte el formato del pedido de Supabase al formato esperado por TicketGenerator
-   * Obtiene los items desde la tabla items_pedido (respetando multitenant)
+   * Convierte el formato del pedido de Supabase al formato esperado por TicketGenerator.
+   * Obtiene los ítems desde la vista vista_items_ticket_cocina (incluye modificaciones:
+   * extras, ingredientes quitados, etc.). Cabecera y notas generales vienen de pedidos.
    */
   async convertOrderToTicketFormat(order) {
     try {
-      // Obtener items del pedido desde la tabla items_pedido
+      // Obtener ítems con modificaciones desde la vista (no solo items_pedido)
       const { data: items, error: itemsError } = await this.supabase
-        .from('items_pedido')
-        .select('producto_nombre, cantidad, precio_unitario, subtotal, notas')
+        .from('vista_items_ticket_cocina')
+        .select('producto_nombre, cantidad, modificaciones')
         .eq('pedido_id', order.id)
-        .order('created_at', { ascending: true });
+        .order('item_pedido_id', { ascending: true });
 
       if (itemsError) {
         logger.warn(`Error al obtener items del pedido ${order.id}: ${itemsError.message}`, { 
@@ -418,7 +419,8 @@ class SupabaseRealtimeListener {
         items: (items || []).map(item => ({
           name: item.producto_nombre || item.nombre || 'Producto',
           quantity: item.cantidad || 1,
-          notes: item.notas || null
+          notes: item.modificaciones || null,
+          modificaciones: item.modificaciones || null
         }))
       };
     } catch (error) {

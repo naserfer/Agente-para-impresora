@@ -173,11 +173,11 @@ class TicketGenerator {
           .text(toCP850(`${cantidad}x ${nombre}\n`))
           .style('NORMAL');  // Volver a normal después
         
-        // Notas/personalizaciones (indentadas, sin negrita)
-        const notas = item.personalizaciones || item.notasItem || item.notes;
-        if (notas) {
+        // Modificaciones por ítem (extras, sin X, etc.): siempre visibles con prefijo "Modif:"
+        const modificaciones = item.modificaciones || item.personalizaciones || item.notasItem || item.notes;
+        if (modificaciones && String(modificaciones).trim()) {
           printer
-            .text(toCP850(`   ${notas}\n`));
+            .text(toCP850(`   Modif: ${String(modificaciones).trim()}\n`));
         }
       });
 
