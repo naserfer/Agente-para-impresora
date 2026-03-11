@@ -15,21 +15,35 @@ function App() {
   const [showWizard, setShowWizard] = useState(false);
   const [wizardKey, setWizardKey] = useState(0); // Key para forzar remount del wizard
   const [mode, setMode] = useState<Mode>(() => {
-    // Por defecto, modo cliente en producción, dev en desarrollo
     const savedMode = localStorage.getItem('app_mode') as Mode;
     return savedMode || 'client';
   });
+  const [isConfigLocked, setIsConfigLocked] = useState(false); // .exe: cliente no puede cambiar config
   const [agentStatus, setAgentStatus] = useState<{ running: boolean; health: any }>({ 
     running: false, 
     health: null 
   });
 
-  // Verificar si es la primera vez que se ejecuta
+  // Si la app está empaquetada (.exe), config bloqueada: solo nosotros con --reset-config
   useEffect(() => {
-    const setupCompleted = localStorage.getItem('setup_completed');
-    if (!setupCompleted) {
-      setShowWizard(true);
+    if (window.electronAPI?.getAppInfo) {
+      window.electronAPI.getAppInfo().then((info) => {
+        if (info?.isConfigLocked) setIsConfigLocked(true);
+      });
     }
+  }, []);
+
+  // Primera vez O sin config (ej. después de --reset-config): mostrar wizard
+  useEffect(() => {
+    if (!window.electronAPI?.getEnvConfig) return;
+    window.electronAPI.getEnvConfig().then((res) => {
+      if (!res.success || !res.data?.SUPABASE_URL) {
+        localStorage.removeItem('setup_completed');
+        setShowWizard(true);
+      } else if (!localStorage.getItem('setup_completed')) {
+        setShowWizard(true);
+      }
+    });
   }, []);
 
   // Log para debugging
@@ -148,7 +162,9 @@ function App() {
     { id: 'printer' as Tab, label: 'Impresora', icon: Printer },
   ];
 
-  const tabs = mode === 'dev' ? devTabs : clientTabs;
+  // .exe: solo pestaña Estado, sin acceso a config
+  const lockedTabs = [{ id: 'status' as Tab, label: 'Estado', icon: Activity }];
+  const tabs = isConfigLocked ? lockedTabs : (mode === 'dev' ? devTabs : clientTabs);
 
   const toggleMode = () => {
     const newMode = mode === 'client' ? 'dev' : 'client';
@@ -211,28 +227,30 @@ function App() {
               </h1>
             </div>
             <div className="flex items-center space-x-4">
-              {/* Toggle Modo */}
-              <button
-                onClick={toggleMode}
-                className={`flex items-center space-x-2 px-4 py-2 text-sm font-medium rounded-lg border transition-colors ${
-                  mode === 'client'
-                    ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
-                    : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
-                }`}
-                title={mode === 'client' ? 'Cambiar a modo Desarrollador' : 'Cambiar a modo Cliente'}
-              >
-                {mode === 'client' ? (
-                  <>
-                    <User className="h-4 w-4" />
-                    <span>Modo Cliente</span>
-                  </>
-                ) : (
-                  <>
-                    <Code className="h-4 w-4" />
-                    <span>Modo Dev</span>
-                  </>
-                )}
-              </button>
+              {/* Toggle Modo: oculto cuando config está bloqueada (.exe) */}
+              {!isConfigLocked && (
+                <button
+                  onClick={toggleMode}
+                  className={`flex items-center space-x-2 px-4 py-2 text-sm font-medium rounded-lg border transition-colors ${
+                    mode === 'client'
+                      ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
+                      : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
+                  }`}
+                  title={mode === 'client' ? 'Cambiar a modo Desarrollador' : 'Cambiar a modo Cliente'}
+                >
+                  {mode === 'client' ? (
+                    <>
+                      <User className="h-4 w-4" />
+                      <span>Modo Cliente</span>
+                    </>
+                  ) : (
+                    <>
+                      <Code className="h-4 w-4" />
+                      <span>Modo Dev</span>
+                    </>
+                  )}
+                </button>
+              )}
 
               {(() => {
                 // Misma lógica que en StatusPanel
@@ -254,8 +272,8 @@ function App() {
                 );
               })()}
 
-              {/* Botón Reset solo en modo Dev */}
-              {mode === 'dev' && (
+              {/* Reset solo en modo Dev y cuando config no está bloqueada (no en .exe) */}
+              {!isConfigLocked && mode === 'dev' && (
                 <button
                   onClick={handleResetConfig}
                   className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-colors"
@@ -297,14 +315,15 @@ function App() {
 
       {/* Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {mode === 'client' ? (
-          // Modo Cliente
+        {isConfigLocked ? (
+          /* .exe: solo dashboard de estado */
+          activeTab === 'status' && <ClientDashboard agentStatus={agentStatus} />
+        ) : mode === 'client' ? (
           <>
             {activeTab === 'status' && <ClientDashboard agentStatus={agentStatus} />}
             {activeTab === 'printer' && <PrinterConfig />}
           </>
         ) : (
-          // Modo Dev
           <>
             {activeTab === 'status' && <StatusPanel agentStatus={agentStatus} />}
             {activeTab === 'supabase' && <SupabaseConfig />}

@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveEnvConfig: (config) => ipcRenderer.invoke('save-env-config', config),
   getEnvConfig: () => ipcRenderer.invoke('get-env-config'),
   resetConfig: () => ipcRenderer.invoke('reset-config'),
+  getAppInfo: () => ipcRenderer.invoke('get-app-info'),
   getAutostart: () => ipcRenderer.invoke('get-autostart'),
   setAutostart: (enabled) => ipcRenderer.invoke('set-autostart', enabled),
 

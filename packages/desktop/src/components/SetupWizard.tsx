@@ -20,6 +20,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [loadingPrinters, setLoadingPrinters] = useState(false);
+  const [finishing, setFinishing] = useState(false);
 
   const steps = {
     welcome: { title: '¡Bienvenido!', icon: Settings },
@@ -196,9 +197,25 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     } else if (currentStep === 'printer') {
       setCurrentStep('complete');
     } else if (currentStep === 'complete') {
-      // Guardar configuración y marcar wizard como completado
-      await saveConfiguration();
-      onComplete(config);
+      setFinishing(true);
+      try {
+        // Guardar configuración y registrar la impresora en el agente de una vez
+        await saveConfiguration();
+        if (window.electronAPI?.configurePrinter && config.printerId && config.printerName) {
+          try {
+            await window.electronAPI.configurePrinter({
+              printerId: config.printerId,
+              type: 'usb',
+              printerName: config.printerName,
+            });
+          } catch (e) {
+            console.warn('No se pudo configurar la impresora en el agente (¿está iniciado?):', e);
+          }
+        }
+        onComplete(config);
+      } finally {
+        setFinishing(false);
+      }
     }
   };
 
@@ -347,16 +364,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
           {currentStep === 'supabase' && (
             <div className="space-y-6">
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <h4 className="font-semibold text-gray-900 mb-2">¿Dónde encuentro estos datos?</h4>
-                <p className="text-sm text-gray-600">
-                  1. Ve a <a href="https://supabase.com" target="_blank" className="text-blue-600 underline">supabase.com</a><br />
-                  2. Selecciona tu proyecto<br />
-                  3. Ve a Settings → API<br />
-                  4. Copia "Project URL" y "anon public"
-                </p>
-              </div>
-
               <div className="space-y-4">
                 <div>
                   <label className="label">URL de Supabase</label>
@@ -373,8 +380,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                   <label className="label">Clave Anon (anon/public)</label>
                   <input
                     type="password"
+                    autoComplete="new-password"
                     className="input font-mono text-sm text-white bg-gray-700 placeholder-gray-400 border-gray-600"
-                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                    placeholder="••••••••••••••••••••••••••••••••"
                     value={config.supabaseKey}
                     onChange={(e) => setConfig({ ...config, supabaseKey: e.target.value })}
                   />
@@ -402,45 +410,6 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
           {currentStep === 'printer' && (
             <div className="space-y-6">
-              {/* Mensaje informativo - ya no depende del agente */}
-              <div className="p-4 rounded-lg bg-blue-50 border-2 border-blue-300">
-                <p className="font-semibold text-blue-800 flex items-center">
-                  <span className="h-3 w-3 bg-blue-500 rounded-full mr-2"></span>
-                  ℹ️ La detección de impresoras funciona directamente desde Windows
-                </p>
-                <p className="text-sm text-blue-700 mt-1">
-                  No es necesario iniciar el agente para buscar impresoras
-                </p>
-              </div>
-
-              {/* Mostrar impresora en uso si hay una seleccionada */}
-              {config.printerName && (
-                <div className="bg-green-50 border-2 border-green-300 rounded-lg p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center">
-                      <Check className="h-6 w-6 text-green-600 mr-3" />
-                      <div>
-                        <p className="font-semibold text-green-900">Impresora en uso</p>
-                        <p className="text-sm text-green-700">{config.printerName}</p>
-                        {config.printerId && (
-                          <p className="text-xs text-green-600 mt-1">ID: {config.printerId}</p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="bg-gray-50 border border-gray-200 rounded-lg p-4">
-                <h4 className="font-semibold text-gray-900 mb-2">Impresoras Disponibles</h4>
-                <p className="text-sm text-gray-600 mb-4">
-                  {config.printerName 
-                    ? 'Puedes cambiar de impresora seleccionando otra de la lista'
-                    : 'Selecciona la impresora que quieres usar para imprimir tickets'
-                  }
-                </p>
-              </div>
-
               {loadingPrinters ? (
                 <div className="text-center py-8">
                   <div className="animate-spin h-12 w-12 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
@@ -589,12 +558,11 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               </div>
 
               <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-left">
-                <h4 className="font-semibold text-blue-900 mb-2">Próximos pasos:</h4>
-                <ol className="space-y-2 text-blue-800 text-sm">
-                  <li>1. Haz clic en "Finalizar" para guardar la configuración</li>
-                  <li>2. Presiona el botón "INICIAR AGENTE" en la pantalla principal</li>
-                  <li>3. ¡Listo! Los tickets se imprimirán automáticamente</li>
-                </ol>
+                <h4 className="font-semibold text-blue-900 mb-2">Al hacer clic en Finalizar:</h4>
+                <ul className="space-y-1 text-blue-800 text-sm">
+                  <li>• Se guarda la configuración y la impresora queda registrada en el agente</li>
+                  <li>• Si el agente está iniciado, ya podés imprimir. Si no, iniciá el agente y listo</li>
+                </ul>
               </div>
             </div>
           )}
@@ -614,10 +582,10 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
           <button
             onClick={handleNext}
-            disabled={!canProceed()}
+            disabled={!canProceed() || finishing}
             className="group flex items-center gap-2 px-8 py-3 text-white bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl font-semibold text-base shadow-lg transition-all duration-200 hover:from-blue-700 hover:to-indigo-700 hover:shadow-xl hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-lg"
           >
-            <span>{currentStep === 'complete' ? 'Finalizar' : 'Siguiente'}</span>
+            <span>{finishing ? 'Guardando...' : currentStep === 'complete' ? 'Finalizar' : 'Siguiente'}</span>
             <ChevronRight className="h-5 w-5 transition-transform duration-200 group-hover:translate-x-1" />
           </button>
         </div>

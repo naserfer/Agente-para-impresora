@@ -19,6 +19,7 @@ export interface ElectronAPI {
   saveEnvConfig: (config: any) => Promise<{ success: boolean; error?: string }>;
   getEnvConfig: () => Promise<{ success: boolean; data?: any; error?: string }>;
   resetConfig: () => Promise<{ success: boolean; message?: string; error?: string }>;
+  getAppInfo: () => Promise<{ isConfigLocked: boolean }>;
   getAutostart: () => Promise<{ success: boolean; enabled?: boolean; error?: string }>;
   setAutostart: (enabled: boolean) => Promise<{ success: boolean; error?: string }>;
 }

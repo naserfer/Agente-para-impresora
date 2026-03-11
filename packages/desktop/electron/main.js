@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, safeStorage } from 'electron';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import { spawn, exec } from 'child_process';
@@ -312,12 +312,16 @@ function spawnAgentProcess() {
           }
         }
       });
+      if (envVars.SUPABASE_ANON_KEY === '__SECURE__' || !envVars.SUPABASE_ANON_KEY) {
+        const decrypted = loadSecureAnonKey();
+        if (decrypted) envVars.SUPABASE_ANON_KEY = decrypted;
+      }
       console.log('[MAIN] ✅ Variables de entorno cargadas desde userData');
     } catch (error) {
       console.warn('[MAIN] ⚠️ Error leyendo .env desde userData:', error.message);
     }
   }
-  
+
   const nodeEnv = isDev 
     ? { ...envVars, NODE_ENV: 'production', PATH: process.env.PATH }
     : { 
@@ -1293,38 +1297,54 @@ ipcMain.handle('test-print', async (event, printerId) => {
   }
 });
 
-// Guardar configuración .env
+// --- Anon key cifrada (DPAPI/Keychain): solo en disco, nunca en .env en claro ---
+function getSecureAnonKeyPath() {
+  return join(app.getPath('userData'), 'secure-anon-key.bin');
+}
+function saveSecureAnonKey(plainKey) {
+  if (!plainKey || typeof plainKey !== 'string') return;
+  if (!safeStorage.isEncryptionAvailable()) return;
+  try {
+    writeFileSync(getSecureAnonKeyPath(), safeStorage.encryptString(plainKey));
+  } catch (e) {
+    console.error('[MAIN] Error cifrando anon key:', e.message);
+  }
+}
+function loadSecureAnonKey() {
+  const path = getSecureAnonKeyPath();
+  if (!existsSync(path) || !safeStorage.isEncryptionAvailable()) return null;
+  try {
+    return safeStorage.decryptString(readFileSync(path));
+  } catch (e) {
+    return null;
+  }
+}
+
+// Guardar configuración .env (anon key se guarda cifrada aparte)
 ipcMain.handle('save-env-config', async (event, config) => {
   try {
     const isDevMode = !app.isPackaged;
-    // Guardar en userData (siempre accesible, incluso en Program Files)
     const userDataEnvPath = join(app.getPath('userData'), '.env');
-    // También guardar en el agente si estamos en desarrollo
     const agentEnvPath = isDevMode ? join(__dirname, '../../agent/.env') : null;
 
-    // Construir contenido del .env
-    let envContent = '# Configuración del Agente de Impresión\n\n';
+    const anonKey = config.SUPABASE_ANON_KEY;
+    const useSecure = anonKey && safeStorage.isEncryptionAvailable();
 
+    let envContent = '# Configuración del Agente de Impresión\n\n';
     for (const [key, value] of Object.entries(config)) {
-      if (value) {
+      if (!value) continue;
+      if (key === 'SUPABASE_ANON_KEY' && useSecure) {
+        saveSecureAnonKey(value);
+        envContent += `${key}=__SECURE__\n`;
+      } else {
         envContent += `${key}=${value}\n`;
       }
     }
 
-    // Guardar en userData (principal)
     writeFileSync(userDataEnvPath, envContent, 'utf8');
-    console.log('[MAIN] ✅ Configuración guardada en userData:', userDataEnvPath);
-    
-    // También guardar en agente si estamos en desarrollo
     if (agentEnvPath) {
-      try {
-        writeFileSync(agentEnvPath, envContent, 'utf8');
-        console.log('[MAIN] ✅ Configuración también guardada en agente (dev):', agentEnvPath);
-      } catch (err) {
-        console.warn('[MAIN] ⚠️ No se pudo guardar en agente (dev):', err.message);
-      }
+      try { writeFileSync(agentEnvPath, envContent, 'utf8'); } catch (err) {}
     }
-
     return { success: true, message: 'Configuración guardada correctamente' };
   } catch (error) {
     console.error('Error saving .env:', error);
@@ -1332,43 +1352,34 @@ ipcMain.handle('save-env-config', async (event, config) => {
   }
 });
 
-// Leer configuración .env existente
+// Leer configuración .env (anon key se resuelve desde almacenamiento cifrado)
 ipcMain.handle('get-env-config', async () => {
   try {
     const isDevMode = !app.isPackaged;
-    // Buscar primero en userData, luego en agente (dev)
     const userDataEnvPath = join(app.getPath('userData'), '.env');
     const agentEnvPath = isDevMode ? join(__dirname, '../../agent/.env') : null;
-    
-    let envPath = null;
-    if (existsSync(userDataEnvPath)) {
-      envPath = userDataEnvPath;
-    } else if (agentEnvPath && existsSync(agentEnvPath)) {
-      envPath = agentEnvPath;
-    }
 
-    if (!envPath || !existsSync(envPath)) {
-      return { success: false, error: 'No configuration file found' };
-    }
+    let envPath = existsSync(userDataEnvPath) ? userDataEnvPath : (agentEnvPath && existsSync(agentEnvPath) ? agentEnvPath : null);
+    if (!envPath) return { success: false, error: 'No configuration file found' };
 
-    const envContent = readFileSync(envPath, 'utf8');
     const config = {};
-
-    // Parsear .env básico
-    envContent.split('\n').forEach(line => {
-      const match = line.match(/^([^=]+)=(.*)$/);
-      if (match) {
-        const key = match[1].trim();
-        const value = match[2].trim();
-        config[key] = value;
+    readFileSync(envPath, 'utf8').split('\n').forEach(line => {
+      const m = line.match(/^([^=]+)=(.*)$/);
+      if (m) {
+        let v = m[2].trim();
+        if (m[1].trim() === 'SUPABASE_ANON_KEY' && v === '__SECURE__') v = loadSecureAnonKey() || '';
+        config[m[1].trim()] = v;
       }
     });
-
     return { success: true, data: config };
   } catch (error) {
-    console.error('Error reading .env:', error);
     return { success: false, error: error.message };
   }
+});
+
+// Para el .exe: config bloqueada (solo nosotros podemos cambiar con --reset-config)
+ipcMain.handle('get-app-info', async () => {
+  return { isConfigLocked: app.isPackaged };
 });
 
 // Handlers para controlar autostart
@@ -1425,16 +1436,15 @@ ipcMain.handle('reset-config', async () => {
       console.warn('[MAIN] ⚠️ No se pudo eliminar .env de userData:', err.message);
     }
     
-    // Eliminar configuración de impresora
     try {
-      if (existsSync(printerConfigPath)) {
-        unlinkSync(printerConfigPath);
-        console.log('[MAIN] ✅ Configuración de impresora eliminada');
-      }
-    } catch (err) {
-      console.warn('[MAIN] ⚠️ No se pudo eliminar configuración de impresora:', err.message);
-    }
-    
+      if (existsSync(printerConfigPath)) { unlinkSync(printerConfigPath); }
+    } catch (err) {}
+
+    const securePath = getSecureAnonKeyPath();
+    try {
+      if (existsSync(securePath)) unlinkSync(securePath);
+    } catch (err) {}
+
     // Eliminar del agente si estamos en desarrollo
     if (agentEnvPath) {
       try {
@@ -1489,7 +1499,21 @@ function sendLogToRenderer(message, level = 'log') {
 // App lifecycle
 app.whenReady().then(() => {
   console.log('🚀 Aplicación iniciando...');
-  
+
+  // Reset por consola: solo nosotros (soporte) ejecutamos agente.exe --reset-config
+  if (process.argv.includes('--reset-config')) {
+    const userDataEnvPath = join(app.getPath('userData'), '.env');
+    const printerConfigPath = join(app.getPath('userData'), 'printer-config.json');
+    try {
+      if (existsSync(userDataEnvPath)) { unlinkSync(userDataEnvPath); console.log('[MAIN] .env eliminado'); }
+      if (existsSync(printerConfigPath)) { unlinkSync(printerConfigPath); }
+      if (existsSync(getSecureAnonKeyPath())) { unlinkSync(getSecureAnonKeyPath()); }
+    } catch (e) {}
+    console.log('[MAIN] Config reseteada. Cierre la app y ábrala de nuevo para volver a configurar.');
+    app.quit();
+    return;
+  }
+
   // Configurar autostart (iniciar con Windows)
   app.setLoginItemSettings({
     openAtLogin: true,
