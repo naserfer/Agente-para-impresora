@@ -279,18 +279,34 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
               </div>
             </div>
 
-            {/* Estado de Realtime */}
+            {/* Estado Supabase / Realtime */}
             <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
               <div className="flex items-center space-x-3">
-                {isRealtimeConnected ? (
+                {health?.supabase?.configured ? (
+                  health.supabase.realtime === 'SUBSCRIBED' ? (
+                    <CheckCircle className="h-6 w-6 text-green-500" />
+                  ) : health.supabase.polling === 'activo' ? (
+                    <Clock className="h-6 w-6 text-amber-500" />
+                  ) : (
+                    <XCircle className="h-6 w-6 text-red-500" />
+                  )
+                ) : isRealtimeConnected ? (
                   <CheckCircle className="h-6 w-6 text-green-500" />
                 ) : (
                   <XCircle className="h-6 w-6 text-red-500" />
                 )}
                 <div>
-                  <p className="font-medium">Supabase Realtime</p>
+                  <p className="font-medium">Supabase</p>
                   <p className="text-sm text-gray-500">
-                    {isRealtimeConnected ? 'Conectado' : 'Desconectado'}
+                    {health?.supabase?.configured
+                      ? health.supabase.realtime === 'SUBSCRIBED'
+                        ? 'Conectado (Realtime)'
+                        : health.supabase.polling === 'activo'
+                          ? `Polling activo${health.supabase.lastPollError ? ` - ${health.supabase.lastPollError}` : ''}`
+                          : health.supabase.realtimeError || health.supabase.error || 'Error'
+                      : isRealtimeConnected
+                        ? 'Conectado'
+                        : 'Desconectado'}
                   </p>
                 </div>
               </div>

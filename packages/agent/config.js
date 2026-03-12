@@ -1,4 +1,14 @@
-require('dotenv').config();
+const path = require('path');
+const agentDir = path.join(__dirname);
+require('dotenv').config({ path: path.join(agentDir, '.env') });
+require('dotenv').config({ path: path.join(agentDir, '.env.local'), override: true });
+// Si .env tiene __SECURE__ y en .env.local solo hay NEXT_PUBLIC_*, usar esas
+if (!process.env.SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_URL) {
+  process.env.SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+}
+if ((!process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY === '__SECURE__') && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY) {
+  process.env.SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+}
 
 // Orígenes permitidos (CORS)
 // Puedes configurar múltiples orígenes separados por coma en ALLOWED_ORIGINS

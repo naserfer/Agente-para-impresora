@@ -1,18 +1,26 @@
 const escpos = require('escpos');
 const iconv = require('iconv-lite');
 
-// Función helper para convertir UTF-8 a CP850 (codificación de impresoras térmicas)
-function toCP850(str) {
+// Eliminar acentos para evitar caracteres raros en impresoras
+function stripAccents(str) {
   if (!str) return '';
   try {
-    // Convertir UTF-8 a CP850 usando iconv-lite
-    // iconv.encode devuelve un Buffer, lo convertimos a string con latin1
-    const buffer = iconv.encode(str, 'cp850');
+    return str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  } catch {
+    return str;
+  }
+}
+
+// Función helper para convertir UTF-8 a CP850 (codificación de impresoras térmicas)
+function toCP850(str) {
+  if (str == null) return '';
+  const plain = stripAccents(String(str));
+  try {
+    const buffer = iconv.encode(plain, 'cp850');
     return buffer.toString('latin1');
   } catch (e) {
-    // Si falla, devolver el string original
     console.warn('Error al convertir a CP850:', e);
-    return str;
+    return plain;
   }
 }
 
@@ -300,6 +308,141 @@ class TicketGenerator {
         .align('ct')
         .text(toCP850('!Gracias por su compra!\n'))
         .feed(3)
+        .cut()
+        .close();
+    });
+
+    return device.getBuffer();
+  }
+
+  /**
+   * Genera comandos ESC/POS para una factura paraguaya (80mm) usando vista_factura_impresion.
+   * @param {Object} factura - Fila de vista_factura_impresion
+   */
+  static generateParaguayInvoice(factura) {
+    const device = new VirtualDevice();
+    const printer = new escpos.Printer(device);
+
+    const items = Array.isArray(factura.detalle) ? factura.detalle : [];
+
+    const formatearFechaHora = (fecha) => {
+      try {
+        const d = fecha ? new Date(fecha) : new Date();
+        const dia = d.getDate().toString().padStart(2, '0');
+        const mes = (d.getMonth() + 1).toString().padStart(2, '0');
+        const anio = d.getFullYear();
+        const horas = d.getHours().toString().padStart(2, '0');
+        const minutos = d.getMinutes().toString().padStart(2, '0');
+        return `${dia}/${mes}/${anio} ${horas}:${minutos}`;
+      } catch {
+        return new Date().toLocaleString('es-PY');
+      }
+    };
+
+    const numeroFactura = factura.numero_factura || '';
+    const timbrado = factura.timbrado || '';
+    const vigInicio = formatearFechaHora(factura.timbrado_vigencia_inicio).split(' ')[0];
+    const vigFin = formatearFechaHora(factura.timbrado_vigencia_fin).split(' ')[0];
+    const fechaEmision = formatearFechaHora(factura.fecha_emision);
+
+    const totalIva10 = Number(factura.total_iva_10 || 0);
+    const totalIva5 = Number(factura.total_iva_5 || 0);
+    const totalExento = Number(factura.total_exento || 0);
+    const totalAPagar = Number(factura.total_a_pagar || 0);
+    const totalIva = totalIva10 + totalIva5;
+    const totalLetras = factura.total_letras || '';
+
+    device.open(() => {
+      const esc = Buffer.from([0x1B, 0x74, 0x01]); // CP850
+      device.write(esc, () => {});
+
+      // Usar siempre tamaño mínimo (1,1) para ahorrar papel
+      printer
+        .encode('CP850')
+        .align('ct')
+        .style('B')
+        .size(1, 1)
+        .text(toCP850(`${factura.emisor_razon_social || 'LOMITERIA'}\n`))
+        .style('NORMAL');
+
+      if (factura.emisor_direccion) {
+        printer.text(toCP850(`${factura.emisor_direccion}\n`));
+      }
+      if (factura.emisor_telefono) {
+        printer.text(toCP850(`Tel: ${factura.emisor_telefono}\n`));
+      }
+      if (factura.emisor_ruc) {
+        printer.text(toCP850(`RUC: ${factura.emisor_ruc}\n`));
+      }
+
+      printer
+        .text(toCP850('-------------------------------\n'))
+        .align('lt')
+        .text(toCP850(`TIMBRADO Nº ${timbrado}\n`))
+        .text(toCP850(`Vigencia: ${vigInicio} al ${vigFin}\n`))
+        .text(toCP850(`Factura Nro: ${numeroFactura}\n`))
+        .text(toCP850(`Fecha: ${fechaEmision}\n`))
+        .text(toCP850('Condición de Venta: Contado\n'))
+        .text(toCP850('-------------------------------\n'));
+
+      const docIdent = factura.receptor_ruc || factura.receptor_ci || '';
+      const nombreCli = factura.receptor_nombre || 'Consumidor final';
+      printer
+        .style('B')
+        .text(toCP850('Cliente:\n'))
+        .style('NORMAL')
+        .text(toCP850(`RUC/CI: ${docIdent}\n`))
+        .text(toCP850(`Nombre: ${nombreCli}\n`));
+      if (factura.receptor_direccion) {
+        printer.text(toCP850(`Dirección: ${factura.receptor_direccion}\n`));
+      }
+      printer.text(toCP850('-------------------------------\n'));
+
+      // Detalle de items
+      printer
+        .style('B')
+        .text(toCP850('Cant  Descripción\n'))
+        .style('NORMAL');
+
+      items.forEach((it) => {
+        const cant = Number(it.cantidad || 1);
+        const nombre = it.producto_nombre || 'Producto';
+        const precio = Number(it.precio_unitario || 0);
+        const subtotal = Number(it.subtotal || 0);
+        const ivaPorc = it.iva_porcentaje != null ? `${it.iva_porcentaje}%` : '';
+
+        printer.text(toCP850(`${cant}  ${nombre}\n`));
+        const precioStr = subtotal.toLocaleString('es-PY');
+        const linea2 = `    ${precio.toLocaleString('es-PY')}   ${precioStr}   (${ivaPorc})`;
+        printer.text(toCP850(`${linea2}\n`));
+      });
+
+      printer.text(toCP850('-------------------------------\n'));
+
+      // Totales
+      printer
+        .align('rt')
+        .text(toCP850(`Exentas: Gs. ${totalExento.toLocaleString('es-PY')}\n`))
+        .text(toCP850(`IVA 5% : Gs. ${totalIva5.toLocaleString('es-PY')}\n`))
+        .text(toCP850(`IVA 10%: Gs. ${totalIva10.toLocaleString('es-PY')}\n`))
+        .text(toCP850(`Total IVA: Gs. ${totalIva.toLocaleString('es-PY')}\n`))
+        .style('B')
+        .text(toCP850(`TOTAL A PAGAR: Gs. ${totalAPagar.toLocaleString('es-PY')}\n`))
+        .style('NORMAL')
+        .align('lt');
+
+      if (totalLetras) {
+        printer
+          .text(toCP850('\nEn letras:\n'))
+          .text(toCP850(`${totalLetras}\n`));
+      }
+
+      printer
+        .feed(1)
+        .align('ct')
+        .text(toCP850('Software: Agente de Impresión\n'))
+        .text(toCP850('Gracias por su preferencia\n'))
+        .feed(2)
         .cut()
         .close();
     });

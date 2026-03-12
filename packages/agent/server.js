@@ -286,11 +286,16 @@ app.get('/health', (req, res) => {
     };
   });
 
+  const supabase = (supabaseListener && typeof supabaseListener.getStatus === 'function')
+    ? supabaseListener.getStatus()
+    : null;
+
   res.json({
     status: 'ok',
     uptime: process.uptime(),
     printers,
     printersCount: printers.length,
+    supabase,
     timestamp: new Date().toISOString()
   });
 });
