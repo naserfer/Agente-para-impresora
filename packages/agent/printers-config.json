@@ -22,5 +22,11 @@
     "type": "usb",
     "printerName": "EPSON TM-T20III Receipt",
     "port": "USB"
+  },
+  "pancholo-printer-1": {
+    "printerId": "pancholo-printer-1",
+    "type": "usb",
+    "printerName": "EPSON TM-T20III Receipt",
+    "port": "USB"
   }
 }

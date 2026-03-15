@@ -24,6 +24,33 @@ function toCP850(str) {
   }
 }
 
+// Normaliza el texto de modificaciones: comas estándar y separadores reconocidos
+function normalizeModificaciones(raw) {
+  if (raw == null) return '';
+  let s = String(raw).trim();
+  if (!s) return '';
+  // Reemplazar comas de ancho completo (，) y otros separadores por coma ASCII
+  s = s.replace(/\uFF0C/g, ',');   // ， full-width comma
+  s = s.replace(/\u3001/g, ',');   // 、 ideographic comma
+  s = s.replace(/[\u201C\u201D\u201E\u201F\u2033\u2036]/g, ','); // comillas que a veces se usan mal
+  s = s.replace(/[;\u00B7\u2022]/g, ','); // punto y coma, punto medio, viñeta
+  s = s.replace(/[\u300C\u300D\uFF62\uFF63]/g, ','); // brackets japoneses 」 etc
+  s = s.replace(/\s*,\s*/g, ', '); // normalizar espacio alrededor de comas
+  s = s.replace(/\uFF5C/g, '|');   // ｜ full-width pipe -> pipe ASCII (combos)
+  return s.replace(/\s+/g, ' ').trim();
+}
+
+// Parte el texto de modificaciones por comas y por pipe | (combos: "Item A | Item B")
+// Una línea por parte para que no se encimen ni se corten palabras
+function splitModificaciones(raw) {
+  const normalized = normalizeModificaciones(raw);
+  if (!normalized) return [];
+  return normalized
+    .split(/\s*[|,]\s*/)
+    .map((part) => part.trim())
+    .filter((part) => part.length > 0);
+}
+
 // Crear un dispositivo virtual para generar comandos
 class VirtualDevice {
   constructor() {
@@ -105,12 +132,12 @@ class TicketGenerator {
         const tipo = (orderData.orderType || orderData.tipo || '').toLowerCase();
         if (tipo === 'delivery' || tipo === 'entrega') {
           tipoPedido = 'DELIVERY';
-        } else if (tipo === 'takeaway' || tipo === 'para llevar' || tipo === 'retiro') {
+        } else if (tipo === 'takeaway' || tipo === 'para llevar' || tipo === 'para_llevar' || tipo === 'retiro') {
           tipoPedido = 'PARA LLEVAR';
         } else if (tipo === 'dine-in' || tipo === 'local' || tipo === 'salon') {
           tipoPedido = 'COMER AQUI';
         } else {
-          tipoPedido = tipo.toUpperCase();
+          tipoPedido = tipo.toUpperCase().replace(/_/g, ' ');
         }
       }
 
@@ -181,11 +208,14 @@ class TicketGenerator {
           .text(toCP850(`${cantidad}x ${nombre}\n`))
           .style('NORMAL');  // Volver a normal después
         
-        // Modificaciones por ítem (extras, sin X, etc.): siempre visibles con prefijo "Modif:"
-        const modificaciones = item.modificaciones || item.personalizaciones || item.notasItem || item.notes;
-        if (modificaciones && String(modificaciones).trim()) {
-          printer
-            .text(toCP850(`   Modif: ${String(modificaciones).trim()}\n`));
+        // Modificaciones por ítem: una línea por modificación (evita que se corten palabras)
+        const modificacionesRaw = item.modificaciones || item.personalizaciones || item.notasItem || item.notes;
+        const modifList = splitModificaciones(modificacionesRaw);
+        if (modifList.length > 0) {
+          printer.text(toCP850('   Modif:\n'));
+          modifList.forEach((mod) => {
+            printer.text(toCP850(`   - ${mod}\n`));
+          });
         }
       });
 
