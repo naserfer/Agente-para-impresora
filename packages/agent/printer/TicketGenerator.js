@@ -51,6 +51,30 @@ function splitModificaciones(raw) {
     .filter((part) => part.length > 0);
 }
 
+// --- Factura compacta (Epson TM-T20) ---
+// node-escpos: size(1,1) manda GS ! 0x11 (= doble ancho/alto en Epson), NO tamaño normal.
+// Tamaño normal = size(0, 0). Font A + interlineado moderado = un poco más grande que Font B.
+const INVOICE_LINE_CHARS = 40; // Font A ~42 cols en 80mm; margen para alinear precios
+
+function applyInvoiceCompactLayout(printer) {
+  printer.font('a').lineSpace(24).size(0, 0);
+}
+
+function resetInvoiceLayout(printer) {
+  printer.font('a').lineSpace().size(0, 0);
+}
+
+function formatInvoiceDetailLine(item, width) {
+  const line = `${item.quantity}x ${item.name}`;
+  const price = `$${Number(item.subtotal).toFixed(2)}`;
+  if (line.length + price.length + 1 <= width) {
+    const pad = ' '.repeat(width - line.length - price.length);
+    return `${line}${pad}${price}\n`;
+  }
+  const second = `${' '.repeat(Math.max(0, width - price.length))}${price}\n`;
+  return `${line}\n${second}`;
+}
+
 // Crear un dispositivo virtual para generar comandos
 class VirtualDevice {
   constructor() {
@@ -257,13 +281,15 @@ class TicketGenerator {
       // Seleccionar tabla de caracteres CP850 (ESC t 1)
       const esc = Buffer.from([0x1B, 0x74, 0x01]); // ESC t 1 = CP850
       device.write(esc, () => {});
-      
+
+      printer.encode('CP850');
+      applyInvoiceCompactLayout(printer);
+
       printer
-        .encode('CP850')
         .align('ct')
-        .size(2, 2)
+        .style('B')
         .text(toCP850(`${invoiceData.lomiteriaName || 'LOMITERIA'}\n`))
-        .size(1, 1);
+        .style('NORMAL');
 
       if (invoiceData.lomiteriaAddress) {
         printer.text(toCP850(`${invoiceData.lomiteriaAddress}\n`));
@@ -304,10 +330,7 @@ class TicketGenerator {
         .feed(1);
 
       invoiceData.items.forEach((item) => {
-        const line = `${item.quantity}x ${item.name}`;
-        const price = `$${item.subtotal.toFixed(2)}`;
-        const padding = ' '.repeat(Math.max(1, 32 - line.length - price.length));
-        printer.text(toCP850(`${line}${padding}${price}\n`));
+        printer.text(toCP850(formatInvoiceDetailLine(item, INVOICE_LINE_CHARS)));
       });
 
       printer
@@ -321,11 +344,9 @@ class TicketGenerator {
       }
 
       printer
-        .style('B')  // Bold
-        .size(2, 1)
+        .style('B')
         .text(toCP850(`TOTAL: $${invoiceData.total.toFixed(2)}\n`))
-        .size(1, 1)
-        .style('NORMAL')  // Normal
+        .style('NORMAL')
         .align('lt');
 
       if (invoiceData.paymentMethod) {
@@ -336,10 +357,10 @@ class TicketGenerator {
         .feed(1)
         .text(toCP850('================================\n'))  // Usar = en lugar de ━
         .align('ct')
-        .text(toCP850('!Gracias por su compra!\n'))
-        .feed(3)
-        .cut()
-        .close();
+        .text(toCP850('KaruBox\n'))
+        .feed(2);
+      resetInvoiceLayout(printer);
+      printer.feed(1).cut().close();
     });
 
     return device.getBuffer();
@@ -386,12 +407,12 @@ class TicketGenerator {
       const esc = Buffer.from([0x1B, 0x74, 0x01]); // CP850
       device.write(esc, () => {});
 
-      // Usar siempre tamaño mínimo (1,1) para ahorrar papel
+      printer.encode('CP850');
+      applyInvoiceCompactLayout(printer);
+
       printer
-        .encode('CP850')
         .align('ct')
         .style('B')
-        .size(1, 1)
         .text(toCP850(`${factura.emisor_razon_social || 'LOMITERIA'}\n`))
         .style('NORMAL');
 
@@ -470,11 +491,10 @@ class TicketGenerator {
       printer
         .feed(1)
         .align('ct')
-        .text(toCP850('Software: Agente de Impresión\n'))
-        .text(toCP850('Gracias por su preferencia\n'))
-        .feed(2)
-        .cut()
-        .close();
+        .text(toCP850('KaruBox\n'))
+        .feed(1);
+      resetInvoiceLayout(printer);
+      printer.feed(1).cut().close();
     });
 
     return device.getBuffer();

@@ -801,6 +801,13 @@ async function checkPortBeforeStart() {
 
 async function startServer() {
   try {
+    // Solo Realtime: sin Express ni POST /print (útil si HTTP nunca fue usable en tu red)
+    if (process.env.DISABLE_HTTP_SERVER === 'true' || process.env.ENABLE_HTTP_SERVER === 'false') {
+      logger.info('🛑 HTTP deshabilitado (DISABLE_HTTP_SERVER=true o ENABLE_HTTP_SERVER=false). Modo solo Supabase Realtime; POST /print no está disponible.', { service: 'print-agent' });
+      console.log('🛑 Agente sin servidor HTTP — impresión automática vía Supabase únicamente.');
+      return { noHttp: true };
+    }
+
     // Verificar el puerto antes de intentar iniciar
     const canStart = await checkPortBeforeStart();
     
@@ -854,14 +861,17 @@ async function startServer() {
 // Iniciar el servidor
 const serverPromise = startServer();
 
-// Iniciar listener de Supabase Realtime (solo si el servidor se inició correctamente)
-// Esto permite imprimir automáticamente cuando se confirma un pedido
+// Iniciar listener de Supabase Realtime (con HTTP normal o en modo solo-Realtime sin HTTP)
 serverPromise.then((server) => {
-  if (!server) {
-    // El agente ya estaba corriendo, no iniciar el listener
+  if (server == null) {
+    // El agente ya estaba corriendo (puerto ocupado), no iniciar otro listener
     return;
   }
-  
+
+  if (server.noHttp) {
+    logger.info('📡 Sin bind HTTP; iniciando solo listener de pedidos…', { service: 'print-agent' });
+  }
+
   // Solo intentar iniciar el listener si está disponible y está habilitado
   if (supabaseListener && process.env.ENABLE_SUPABASE_LISTENER !== 'false') {
     supabaseListener.start()
@@ -924,6 +934,7 @@ async function shutdown() {
         process.exit(0);
       });
     } else {
+      // Sin HTTP ({ noHttp: true }) o sin servidor: salir tras detener listener
       process.exit(0);
     }
   }).catch(() => {
