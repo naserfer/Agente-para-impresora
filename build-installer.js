@@ -262,7 +262,8 @@ function buildInstaller(config) {
     const desktopPkgPath = path.join(__dirname, 'packages/desktop/package.json');
     const desktopPkg = JSON.parse(fs.readFileSync(desktopPkgPath, 'utf8'));
 
-    desktopPkg.build.productName = config.aplicacion.nombreApp;
+    // Branding global para todos los locales
+    desktopPkg.build.productName = 'Agente de Impresion de KaruBox';
     desktopPkg.version = config.aplicacion.version;
 
     fs.writeFileSync(desktopPkgPath, JSON.stringify(desktopPkg, null, 2), 'utf8');

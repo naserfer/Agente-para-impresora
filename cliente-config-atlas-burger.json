@@ -19,8 +19,8 @@
     "ubicacion": "Cocina"
   },
   "aplicacion": {
-    "nombreApp": "Agente de Impresion - Atlas Burger",
-    "version": "1.0.0",
+    "nombreApp": "Agente de Impresion de KaruBox",
+    "version": "1.0.1",
     "vercelUrl": "https://lomiteria1-0.vercel.app",
     "autoInicio": false
   },

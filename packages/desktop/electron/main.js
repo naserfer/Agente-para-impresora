@@ -1415,6 +1415,9 @@ ipcMain.handle('set-autostart', async (event, enabled) => {
 // Resetear configuración (eliminar .env y localStorage)
 ipcMain.handle('reset-config', async () => {
   try {
+    if (app.isPackaged) {
+      return { success: false, error: 'Reset bloqueado en modo .exe. Usa consola con --reset-config' };
+    }
     const isDevMode = !app.isPackaged;
     // Eliminar .env de userData (principal)
     const userDataEnvPath = join(app.getPath('userData'), '.env');

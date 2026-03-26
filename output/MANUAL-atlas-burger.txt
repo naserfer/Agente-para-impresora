@@ -98,7 +98,7 @@ Detener el agente:
 Email: soporte@lomiteria.com
 Teléfono: [AGREGAR NÚMERO]
 
-Versión del software: 1.0.0
+Versión del software: 1.0.1
 Cliente: Atlas Burger
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -1,6 +1,6 @@
 {
   "name": "print-agent-desktop",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Interfaz gráfica para configuración del agente de impresión",
   "main": "./electron/main.js",
   "type": "module",
@@ -46,7 +46,7 @@
   "build": {
     "electronVersion": "28.3.3",
     "appId": "com.lomiteria.print-agent",
-    "productName": "Agente de Impresion",
+    "productName": "Agente de Impresion de KaruBox",
     "afterPack": "./build-scripts/afterPack.cjs",
     "directories": {
       "output": "dist-installer-unlock",
@@ -82,15 +82,15 @@
         }
       ],
       "icon": "assets/icon.png",
-      "artifactName": "${productName}-${version}-Setup.${ext}"
+      "artifactName": "AgenteImpresion-${version}-Setup.${ext}"
     },
     "portable": {
       "artifactName": "${productName}-${version}-Portable.${ext}"
     },
     "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "allowElevation": true,
+      "oneClick": true,
+      "allowToChangeInstallationDirectory": false,
+      "allowElevation": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "Agente de Impresión",
