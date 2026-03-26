@@ -65,6 +65,20 @@ function loadClientConfig(clientName) {
   }
 }
 
+function validateClientConfig(config) {
+  const missing = [];
+  if (!config?.supabase?.url) missing.push('supabase.url');
+  if (!config?.supabase?.anonKey) missing.push('supabase.anonKey');
+  if (!config?.impresora?.printerId) missing.push('impresora.printerId');
+  if (!config?.cliente?.nombre) missing.push('cliente.nombre');
+  if (!config?.cliente?.slug) missing.push('cliente.slug');
+
+  if (missing.length > 0) {
+    error(`Configuración incompleta. Faltan campos requeridos: ${missing.join(', ')}`);
+    process.exit(1);
+  }
+}
+
 // Generar SQL personalizado
 function generateSQL(config) {
   info('Generando SQL personalizado...');
@@ -95,7 +109,8 @@ function generateEnv(config) {
   info('Generando archivo .env...');
 
   const envContent = `# Configuración del Agente - ${config.cliente.nombre}
-# Generado automáticamente - NO editar manualmente
+# Generado automáticamente - BLOQUEADO EN BUILD
+# No exponer ni editar credenciales en el cliente final
 
 # Conexión a Supabase
 SUPABASE_URL=${config.supabase.url}
@@ -119,9 +134,8 @@ LOG_LEVEL=${config.avanzado.logLevel}
 # NO usar túneles con Supabase Realtime
 AUTO_TUNNEL=false
 
-# Configuración Específica del Cliente (para Setup Wizard)
-PRINTER_ID=${config.impresora.printerId}
-CLIENT_NAME=${config.cliente.nombre}
+# Configuración local editable en runtime (wizard)
+# PRINTER_ID y CLIENT_NAME se guardan localmente por instalación
 `;
 
   const outputPath = path.join(__dirname, 'output/.env');
@@ -183,12 +197,7 @@ Paso 1: Información del Negocio
    • Nombre: ${config.cliente.nombre}
    • Este nombre aparecerá en los tickets
 
-Paso 2: Conexión a Supabase
-   • URL de Supabase: (proporcionada por soporte técnico)
-   • Clave de acceso: (proporcionada por soporte técnico)
-   • Presiona "Probar Conexión" para verificar
-
-Paso 3: Seleccionar Impresora
+Paso 2: Seleccionar Impresora
    • Selecciona: ${config.impresora.nombreEsperado}
    • ID de impresora: ${config.impresora.printerId}
    • Presiona "Finalizar"
@@ -321,6 +330,7 @@ function main() {
 
   // 1. Cargar configuración
   const config = loadClientConfig(clientName);
+  validateClientConfig(config);
 
   // 2. Crear directorio de salida
   const outputDir = path.join(__dirname, 'output');

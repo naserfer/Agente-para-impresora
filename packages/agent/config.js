@@ -10,6 +10,25 @@ if ((!process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY === '__SECU
   process.env.SUPABASE_ANON_KEY = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 }
 
+function validateFixedSupabaseConfig() {
+  const listenerEnabled = process.env.ENABLE_SUPABASE_LISTENER !== 'false';
+  if (!listenerEnabled) return;
+
+  const missing = [];
+  if (!process.env.SUPABASE_URL) missing.push('SUPABASE_URL');
+  if (!process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_ANON_KEY === '__SECURE__') {
+    missing.push('SUPABASE_ANON_KEY');
+  }
+
+  if (missing.length > 0) {
+    throw new Error(
+      `[CONFIG] Faltan credenciales Supabase requeridas (${missing.join(', ')}). ` +
+      'Este agente requiere configuración fija en build (.env empaquetado).'
+    );
+  }
+}
+validateFixedSupabaseConfig();
+
 // Orígenes permitidos (CORS)
 // Puedes configurar múltiples orígenes separados por coma en ALLOWED_ORIGINS
 // Ejemplo: ALLOWED_ORIGINS=https://lomiteria1-0.vercel.app

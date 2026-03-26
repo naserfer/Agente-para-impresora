@@ -147,7 +147,7 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
   return (
     <div className="space-y-6">
       {/* BOTÓN PRINCIPAL GRANDE - INICIAR/DETENER */}
-      <div className="card bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-200">
+      <div className="card border-slate-200">
         <div className="text-center">
           <h2 className="text-2xl font-bold text-gray-900 mb-2">
             {businessName}
@@ -160,7 +160,7 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
             <button
               onClick={handleStartAgent}
               disabled={actionLoading}
-              className="w-full max-w-md mx-auto bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-6 px-8 rounded-xl shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-4"
+              className="w-full max-w-md mx-auto bg-slate-800 hover:bg-slate-700 text-white font-semibold py-5 px-8 rounded-md border border-slate-800 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-4"
             >
               {actionLoading ? (
                 <>
@@ -170,7 +170,7 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
               ) : (
                 <>
                   <Play className="h-8 w-8" fill="white" />
-                  <span className="text-2xl">INICIAR AGENTE</span>
+                  <span className="text-xl">INICIAR AGENTE</span>
                 </>
               )}
             </button>
@@ -178,7 +178,7 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
             <button
               onClick={handleStopAgent}
               disabled={actionLoading}
-              className="w-full max-w-md mx-auto bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white font-bold py-6 px-8 rounded-xl shadow-lg hover:shadow-xl transform hover:scale-105 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed disabled:transform-none flex items-center justify-center space-x-4"
+              className="w-full max-w-md mx-auto bg-rose-700 hover:bg-rose-800 text-white font-semibold py-5 px-8 rounded-md border border-rose-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-4"
             >
               {actionLoading ? (
                 <>
@@ -188,7 +188,7 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
               ) : (
                 <>
                   <Square className="h-8 w-8" fill="white" />
-                  <span className="text-2xl">DETENER AGENTE</span>
+                  <span className="text-xl">DETENER AGENTE</span>
                 </>
               )}
             </button>

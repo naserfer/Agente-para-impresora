@@ -1,13 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Printer, Settings, Activity, FileText, RotateCcw, Code, User } from 'lucide-react';
-import SupabaseConfig from './components/SupabaseConfig';
+import { Printer, Activity, FileText, RotateCcw, Code, User } from 'lucide-react';
 import PrinterConfig from './components/PrinterConfig';
 import StatusPanel from './components/StatusPanel';
 import LogsViewer from './components/LogsViewer';
 import SetupWizard from './components/SetupWizard';
 import ClientDashboard from './components/ClientDashboard';
 
-type Tab = 'status' | 'supabase' | 'printer' | 'logs';
+type Tab = 'status' | 'printer' | 'logs';
 type Mode = 'client' | 'dev';
 
 function App() {
@@ -37,10 +36,15 @@ function App() {
   useEffect(() => {
     if (!window.electronAPI?.getEnvConfig) return;
     window.electronAPI.getEnvConfig().then((res) => {
+      const hasLocalSetup = !!localStorage.getItem('setup_completed');
+      const hasLocalPrinterId = !!localStorage.getItem('printer_id');
+      const hasLocalPrinterName = !!localStorage.getItem('printer_name');
+      const hasLocalBusinessName = !!localStorage.getItem('business_name');
+
       if (!res.success || !res.data?.SUPABASE_URL) {
         localStorage.removeItem('setup_completed');
         setShowWizard(true);
-      } else if (!localStorage.getItem('setup_completed')) {
+      } else if (!hasLocalSetup || !hasLocalPrinterId || !hasLocalPrinterName || !hasLocalBusinessName) {
         setShowWizard(true);
       }
     });
@@ -152,7 +156,6 @@ function App() {
 
   const devTabs = [
     { id: 'status' as Tab, label: 'Estado', icon: Activity },
-    { id: 'supabase' as Tab, label: 'Supabase', icon: Settings },
     { id: 'printer' as Tab, label: 'Impresora', icon: Printer },
     { id: 'logs' as Tab, label: 'Logs', icon: FileText },
   ];
@@ -162,8 +165,11 @@ function App() {
     { id: 'printer' as Tab, label: 'Impresora', icon: Printer },
   ];
 
-  // .exe: solo pestaña Estado, sin acceso a config
-  const lockedTabs = [{ id: 'status' as Tab, label: 'Estado', icon: Activity }];
+  // .exe: permitir solo operación diaria + configuración local de impresora
+  const lockedTabs = [
+    { id: 'status' as Tab, label: 'Dashboard', icon: Activity },
+    { id: 'printer' as Tab, label: 'Impresora', icon: Printer },
+  ];
   const tabs = isConfigLocked ? lockedTabs : (mode === 'dev' ? devTabs : clientTabs);
 
   const toggleMode = () => {
@@ -215,14 +221,14 @@ function App() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="h-screen bg-slate-100 text-slate-900 overflow-hidden">
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 shadow-sm">
+      <header className="bg-white border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16">
+          <div className="flex items-center justify-between h-14">
             <div className="flex items-center">
-              <Printer className="h-8 w-8 text-primary-600 mr-3" />
-              <h1 className="text-2xl font-bold text-gray-900">
+              <Printer className="h-6 w-6 text-slate-700 mr-3" />
+              <h1 className="text-lg font-semibold tracking-tight text-slate-900">
                 Agente de Impresión
               </h1>
             </div>
@@ -231,10 +237,10 @@ function App() {
               {!isConfigLocked && (
                 <button
                   onClick={toggleMode}
-                  className={`flex items-center space-x-2 px-4 py-2 text-sm font-medium rounded-lg border transition-colors ${
+                  className={`flex items-center space-x-2 px-3 py-1.5 text-sm font-medium rounded-md border transition-colors ${
                     mode === 'client'
-                      ? 'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100'
-                      : 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
+                      ? 'bg-slate-800 text-white border-slate-800 hover:bg-slate-700'
+                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
                   }`}
                   title={mode === 'client' ? 'Cambiar a modo Desarrollador' : 'Cambiar a modo Cliente'}
                 >
@@ -257,10 +263,10 @@ function App() {
                 const isActive = agentStatus.running || 
                                 (agentStatus.health && agentStatus.health.status === 'ok');
                 return (
-                  <div className={`flex items-center space-x-2 px-3 py-1 rounded-full ${
+                  <div className={`flex items-center space-x-2 px-3 py-1 rounded-md border ${
                     isActive
-                      ? 'bg-green-100 text-green-800' 
-                      : 'bg-red-100 text-red-800'
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-700' 
+                      : 'bg-rose-50 border-rose-200 text-rose-700'
                   }`}>
                     <div className={`h-2 w-2 rounded-full ${
                       isActive ? 'bg-green-500' : 'bg-red-500'
@@ -276,7 +282,7 @@ function App() {
               {!isConfigLocked && mode === 'dev' && (
                 <button
                   onClick={handleResetConfig}
-                  className="flex items-center space-x-2 px-4 py-2 text-sm font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 hover:border-red-300 transition-colors"
+                  className="flex items-center space-x-2 px-3 py-1.5 text-sm font-medium text-rose-700 bg-white border border-rose-200 rounded-md hover:bg-rose-50 transition-colors"
                   title="Resetear configuración (para pruebas)"
                 >
                   <RotateCcw className="h-4 w-4" />
@@ -289,19 +295,19 @@ function App() {
       </header>
 
       {/* Tabs */}
-      <div className="bg-white border-b border-gray-200">
+      <div className="bg-white border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <nav className="flex space-x-8">
+          <nav className="flex space-x-6">
             {tabs.map((tab) => {
               const Icon = tab.icon;
               return (
                 <button
                   key={tab.id}
                   onClick={() => setActiveTab(tab.id)}
-                  className={`flex items-center space-x-2 py-4 px-1 border-b-2 font-medium text-sm transition-colors ${
+                  className={`flex items-center space-x-2 py-3 px-1 border-b-2 font-medium text-sm transition-colors ${
                     activeTab === tab.id
-                      ? 'border-primary-500 text-primary-600'
-                      : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      ? 'border-slate-800 text-slate-900'
+                      : 'border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300'
                   }`}
                 >
                   <Icon className="h-5 w-5" />
@@ -314,10 +320,12 @@ function App() {
       </div>
 
       {/* Content */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4 h-[calc(100vh-108px)] overflow-hidden">
         {isConfigLocked ? (
-          /* .exe: solo dashboard de estado */
-          activeTab === 'status' && <ClientDashboard agentStatus={agentStatus} />
+          <>
+            {activeTab === 'status' && <ClientDashboard agentStatus={agentStatus} />}
+            {activeTab === 'printer' && <PrinterConfig />}
+          </>
         ) : mode === 'client' ? (
           <>
             {activeTab === 'status' && <ClientDashboard agentStatus={agentStatus} />}
@@ -326,7 +334,6 @@ function App() {
         ) : (
           <>
             {activeTab === 'status' && <StatusPanel agentStatus={agentStatus} />}
-            {activeTab === 'supabase' && <SupabaseConfig />}
             {activeTab === 'printer' && <PrinterConfig />}
             {activeTab === 'logs' && <LogsViewer />}
           </>

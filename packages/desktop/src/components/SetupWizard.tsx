@@ -1,30 +1,37 @@
 import { useState, useEffect } from 'react';
-import { ChevronRight, ChevronLeft, Check, Printer, Database, Settings } from 'lucide-react';
+import { ChevronRight, ChevronLeft, Check, Printer, Settings } from 'lucide-react';
 
 interface SetupWizardProps {
   onComplete: (config: any) => void;
 }
 
-type Step = 'welcome' | 'supabase' | 'printer' | 'complete';
+type Step = 'welcome' | 'printer' | 'complete';
+
+function normalizePrinterId(value: string): string {
+  if (!value) return '';
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/burguer/g, 'burger')
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-_]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
 
 export default function SetupWizard({ onComplete }: SetupWizardProps) {
   const [currentStep, setCurrentStep] = useState<Step>('welcome');
   const [config, setConfig] = useState({
-    supabaseUrl: '',
-    supabaseKey: '',
     printerId: '',
     printerName: '',
     businessName: ''
   });
   const [availablePrinters, setAvailablePrinters] = useState<any[]>([]);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [loadingPrinters, setLoadingPrinters] = useState(false);
   const [finishing, setFinishing] = useState(false);
 
   const steps = {
     welcome: { title: '¡Bienvenido!', icon: Settings },
-    supabase: { title: 'Conexión a Supabase', icon: Database },
     printer: { title: 'Configurar Impresora', icon: Printer },
     complete: { title: 'Listo', icon: Check }
   };
@@ -64,49 +71,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     }
   };
 
-  const testSupabaseConnection = async () => {
-    if (!config.supabaseUrl || !config.supabaseKey) {
-      setTestResult({ success: false, message: 'Por favor completa todos los campos' });
-      return;
-    }
-
-    setTesting(true);
-    setTestResult(null);
-
-    try {
-      // Importar Supabase client dinámicamente
-      const { createClient } = await import('@supabase/supabase-js');
-
-      const supabase = createClient(config.supabaseUrl, config.supabaseKey);
-
-      // Probar conexión simple
-      const { error } = await supabase.from('tenants').select('count').limit(1);
-
-      if (error) {
-        setTestResult({
-          success: false,
-          message: `Error: ${error.message}`
-        });
-        return false;
-      } else {
-        setTestResult({
-          success: true,
-          message: '✅ Conexión exitosa'
-        });
-        return true;
-      }
-    } catch (error: any) {
-      setTestResult({
-        success: false,
-        message: `Error: ${error.message}`
-      });
-      return false;
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  // Cargar configuración existente del .env embebido
+  // Cargar configuración existente del .env embebido + local
   useEffect(() => {
     const checkEmbeddedConfig = async () => {
       if (!window.electronAPI?.getEnvConfig) return;
@@ -118,35 +83,21 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
           console.log('Configuración encontrada:', envConfig);
 
-          // Cargar también desde localStorage como fallback
+          // Cargar desde localStorage como fuente principal de configuración local
+          const savedBusinessName = localStorage.getItem('business_name') || '';
           const savedPrinterName = localStorage.getItem('printer_name') || '';
           const savedPrinterId = localStorage.getItem('printer_id') || '';
 
           // Pre-llenar datos
           setConfig(prev => ({
             ...prev,
-            supabaseUrl: envConfig.SUPABASE_URL || '',
-            supabaseKey: envConfig.SUPABASE_ANON_KEY || '',
-            printerId: envConfig.PRINTER_ID || savedPrinterId || '',
+            printerId: normalizePrinterId(envConfig.PRINTER_ID || savedPrinterId || ''),
             printerName: savedPrinterName || '', // Cargar nombre de impresora guardado
-            businessName: envConfig.CLIENT_NAME || '', // Leer CLIENT_NAME si existe
+            businessName: savedBusinessName || envConfig.CLIENT_NAME || '', // Priorizar dato local editable
           }));
 
-          // IMPORTANTE: Solo saltar pasos si TODOS los datos están completos
-          // Si falta el nombre del negocio, SIEMPRE mostrar el paso 'welcome' primero
-          if (envConfig.CLIENT_NAME && envConfig.SUPABASE_URL && envConfig.SUPABASE_ANON_KEY) {
-            // Si TODO está completo (nombre, supabase), saltar hasta impresora
-            setTimeout(async () => {
-              setCurrentStep('printer');
-              // NO llamar loadPrinters aquí - el useEffect lo hará automáticamente
-            }, 1000);
-          } else if (envConfig.CLIENT_NAME && (!envConfig.SUPABASE_URL || !envConfig.SUPABASE_ANON_KEY)) {
-            // Si hay nombre pero falta Supabase, ir a paso de Supabase
-            setTimeout(async () => {
-              setCurrentStep('supabase');
-            }, 1000);
-          }
-          // Si NO hay CLIENT_NAME, quedarse en 'welcome' (paso inicial) para que el usuario lo ingrese
+          // No auto-saltar pasos por valores embebidos del build.
+          // El usuario siempre debe confirmar configuración local en esta instalación.
         }
       } catch (error) {
         console.error('Error cargando configuración embebida:', error);
@@ -184,16 +135,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
   const handleNext = async () => {
     if (currentStep === 'welcome') {
-      setCurrentStep('supabase');
-    } else if (currentStep === 'supabase') {
-      // Validar Supabase antes de continuar
-      if (!config.supabaseUrl || !config.supabaseKey) {
-        setTestResult({ success: false, message: 'Por favor completa todos los campos' });
-        return;
-      }
-      // Cargar impresoras al avanzar al paso de impresora
       setCurrentStep('printer');
-      // NO llamar loadPrinters aquí - el useEffect lo hará automáticamente
     } else if (currentStep === 'printer') {
       setCurrentStep('complete');
     } else if (currentStep === 'complete') {
@@ -204,7 +146,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         if (window.electronAPI?.configurePrinter && config.printerId && config.printerName) {
           try {
             await window.electronAPI.configurePrinter({
-              printerId: config.printerId,
+              printerId: normalizePrinterId(config.printerId),
               type: 'usb',
               printerName: config.printerName,
             });
@@ -220,10 +162,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
   };
 
   const handleBack = () => {
-    if (currentStep === 'supabase') {
+    if (currentStep === 'printer') {
       setCurrentStep('welcome');
-    } else if (currentStep === 'printer') {
-      setCurrentStep('supabase');
     } else if (currentStep === 'complete') {
       setCurrentStep('printer');
     }
@@ -233,13 +173,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     if (!window.electronAPI?.saveEnvConfig) return;
 
     const envConfig = {
-      SUPABASE_URL: config.supabaseUrl,
-      SUPABASE_ANON_KEY: config.supabaseKey,
       CLIENT_NAME: config.businessName, // Guardar nombre del negocio
-      PRINTER_ID: config.printerId, // Guardar ID de impresora
-      ENABLE_SUPABASE_LISTENER: 'true',
-      PORT: '3001',
-      LOG_LEVEL: 'info'
+      PRINTER_ID: normalizePrinterId(config.printerId), // Guardar ID de impresora
     };
 
     try {
@@ -247,9 +182,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
       // Guardar también en localStorage para acceso rápido
       localStorage.setItem('setup_completed', 'true');
       localStorage.setItem('business_name', config.businessName);
-      localStorage.setItem('printer_id', config.printerId);
+      localStorage.setItem('printer_id', normalizePrinterId(config.printerId));
       localStorage.setItem('printer_name', config.printerName);
-      localStorage.setItem('supabase_url', config.supabaseUrl);
       console.log('✅ Configuración guardada correctamente');
     } catch (error) {
       console.error('Error saving configuration:', error);
@@ -261,22 +195,19 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
     if (currentStep === 'welcome') {
       return config.businessName && config.businessName.trim().length > 0;
     }
-    if (currentStep === 'supabase') {
-      return config.supabaseUrl && config.supabaseKey && testResult?.success;
-    }
     if (currentStep === 'printer') {
       // Permitir avanzar si hay nombre de impresora (el ID se genera automáticamente si no se ingresa)
-      const printerId = config.printerId || `${config.businessName?.toLowerCase().replace(/\s+/g, '-') || 'printer'}-printer-1`;
+      const printerId = normalizePrinterId(config.printerId || `${config.businessName || 'printer'}-printer-1`);
       return config.printerName && printerId;
     }
     return true;
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full overflow-hidden">
+    <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+      <div className="bg-white rounded-lg border border-slate-200 shadow-sm max-w-2xl w-full overflow-hidden">
         {/* Progress Bar */}
-        <div className="bg-gradient-to-r from-blue-600 to-indigo-600 p-6 text-white">
+        <div className="bg-slate-900 p-4 text-white">
           <div className="flex items-center justify-between mb-4">
             {Object.entries(steps).map(([key, step], index) => {
               const Icon = step.icon;
@@ -285,33 +216,33 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
               return (
                 <div key={key} className="flex items-center">
-                  <div className={`rounded-full p-3 ${isActive ? 'bg-white text-blue-600' :
-                    isPast ? 'bg-blue-400' : 'bg-blue-700'
+                  <div className={`rounded-full p-2.5 ${isActive ? 'bg-white text-slate-900' :
+                    isPast ? 'bg-slate-500' : 'bg-slate-700'
                     }`}>
                     <Icon className="h-6 w-6" />
                   </div>
                   {index < Object.keys(steps).length - 1 && (
-                    <div className={`h-1 w-16 mx-2 ${isPast ? 'bg-blue-400' : 'bg-blue-700'
+                    <div className={`h-1 w-10 mx-2 ${isPast ? 'bg-slate-500' : 'bg-slate-700'
                       }`} />
                   )}
                 </div>
               );
             })}
           </div>
-          <h2 className="text-2xl font-bold">{steps[currentStep].title}</h2>
+          <h2 className="text-lg font-semibold tracking-tight">{steps[currentStep].title}</h2>
         </div>
 
         {/* Content */}
-        <div className="p-8">
+        <div className="p-5">
           {currentStep === 'welcome' && (
             <div className="space-y-6">
               <div className="text-center">
-                <Printer className="h-24 w-24 text-blue-600 mx-auto mb-4" />
-                <h3 className="text-3xl font-bold text-gray-900 mb-4">
+                <Printer className="h-14 w-14 text-slate-700 mx-auto mb-3" />
+                <h3 className="text-xl font-semibold text-slate-900 mb-2">
                   Configuración Inicial
                 </h3>
-                <p className="text-lg text-gray-600 mb-6">
-                  Te ayudaremos a configurar tu agente de impresión en solo 3 pasos.
+                <p className="text-sm text-slate-600 mb-4">
+                  Te ayudaremos a configurar tu agente de impresión en solo 2 pasos.
                 </p>
               </div>
 
@@ -321,17 +252,17 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 </label>
                 <input
                   type="text"
-                  className={`input text-lg text-white bg-gray-700 placeholder-gray-400 ${
+                  className={`input text-sm ${
                     !config.businessName || config.businessName.trim().length === 0 
-                      ? 'border-red-300 focus:ring-red-500 focus:border-red-500' 
-                      : 'border-gray-600'
+                      ? 'border-rose-300 focus:ring-rose-200 focus:border-rose-400' 
+                      : ''
                   }`}
-                  placeholder="Ej: Atlas Burger"
+                  placeholder="Ej: Mi Negocio - Sucursal 1"
                   value={config.businessName}
                   onChange={(e) => setConfig({ ...config, businessName: e.target.value })}
                   required
                 />
-                <p className="text-sm text-gray-500">
+                <p className="text-sm text-slate-500">
                   Este nombre aparecerá en los tickets impresos
                 </p>
                 {(!config.businessName || config.businessName.trim().length === 0) && (
@@ -342,13 +273,9 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                 )}
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-                <h4 className="font-semibold text-blue-900 mb-2">¿Qué necesitas tener listo?</h4>
-                <ul className="space-y-2 text-blue-800">
-                  <li className="flex items-center">
-                    <Check className="h-5 w-5 mr-2" />
-                    URL de Supabase y clave de acceso
-                  </li>
+              <div className="bg-slate-50 border border-slate-200 rounded-md p-3">
+                <h4 className="font-semibold text-slate-900 mb-2">¿Qué necesitas tener listo?</h4>
+                <ul className="space-y-2 text-slate-700">
                   <li className="flex items-center">
                     <Check className="h-5 w-5 mr-2" />
                     Impresora térmica conectada (Epson recomendada)
@@ -362,73 +289,27 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             </div>
           )}
 
-          {currentStep === 'supabase' && (
-            <div className="space-y-6">
-              <div className="space-y-4">
-                <div>
-                  <label className="label">URL de Supabase</label>
-                  <input
-                    type="text"
-                    className="input text-white bg-gray-700 placeholder-gray-400 border-gray-600"
-                    placeholder="https://tu-proyecto.supabase.co"
-                    value={config.supabaseUrl}
-                    onChange={(e) => setConfig({ ...config, supabaseUrl: e.target.value })}
-                  />
-                </div>
-
-                <div>
-                  <label className="label">Clave Anon (anon/public)</label>
-                  <input
-                    type="password"
-                    autoComplete="new-password"
-                    className="input font-mono text-sm text-white bg-gray-700 placeholder-gray-400 border-gray-600"
-                    placeholder="••••••••••••••••••••••••••••••••"
-                    value={config.supabaseKey}
-                    onChange={(e) => setConfig({ ...config, supabaseKey: e.target.value })}
-                  />
-                </div>
-
-                <button
-                  onClick={testSupabaseConnection}
-                  disabled={testing || !config.supabaseUrl || !config.supabaseKey}
-                  className="btn-primary w-full"
-                >
-                  {testing ? 'Probando conexión...' : 'Probar Conexión'}
-                </button>
-
-                {testResult && (
-                  <div className={`p-4 rounded-lg ${testResult.success
-                    ? 'bg-green-50 border border-green-200 text-green-800'
-                    : 'bg-red-50 border border-red-200 text-red-800'
-                    }`}>
-                    {testResult.message}
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-
           {currentStep === 'printer' && (
             <div className="space-y-6">
               {loadingPrinters ? (
                 <div className="text-center py-8">
-                  <div className="animate-spin h-12 w-12 border-4 border-blue-500 border-t-transparent rounded-full mx-auto mb-4"></div>
-                  <p className="text-gray-600">Buscando impresoras...</p>
-                  <p className="text-sm text-gray-500 mt-2">Revisa la consola (F12) para ver logs detallados</p>
+                  <div className="animate-spin h-12 w-12 border-4 border-slate-400 border-t-transparent rounded-full mx-auto mb-4"></div>
+                  <p className="text-slate-600">Buscando impresoras...</p>
+                  <p className="text-sm text-slate-500 mt-2">Revisa la consola (F12) para ver logs detallados</p>
                 </div>
               ) : availablePrinters.length === 0 ? (
                 <div className="space-y-6">
                   <div className="text-center py-4">
-                    <Printer className="h-16 w-16 text-gray-300 mx-auto mb-4" />
-                    <p className="text-gray-600 mb-2">No se detectaron impresoras</p>
-                    <p className="text-sm text-gray-500 mb-4 max-w-md mx-auto">
+                    <Printer className="h-12 w-12 text-slate-300 mx-auto mb-3" />
+                    <p className="text-slate-600 mb-2">No se detectaron impresoras</p>
+                    <p className="text-sm text-slate-500 mb-4 max-w-md mx-auto">
                       Asegúrate de que la impresora esté conectada por USB, encendida y con los <b>drivers instalados</b> en Windows.
                     </p>
                   </div>
                   
                   {/* Opción para ingresar manualmente */}
                   <div className="border-t pt-6">
-                    <p className="text-sm text-gray-600 mb-4 text-center">
+                    <p className="text-sm text-slate-600 mb-4 text-center">
                       O ingresa manualmente el nombre de tu impresora:
                     </p>
                     <div className="space-y-4">
@@ -440,8 +321,8 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                           type="text"
                           value={config.printerName}
                           onChange={(e) => setConfig({ ...config, printerName: e.target.value })}
-                          placeholder="Ej: Epson TM-T20"
-                          className="w-full px-4 py-2 border border-gray-600 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-white bg-gray-700 placeholder-gray-400"
+                          placeholder="Ej: EPSON TM-T20III Receipt"
+                          className="input text-sm"
                         />
                       </div>
                     </div>
@@ -457,31 +338,31 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                         setConfig({
                           ...config,
                           printerName: newPrinterName,
-                          printerId: config.printerId || `${config.businessName?.toLowerCase().replace(/\s+/g, '-')}-printer-1`
+                          printerId: normalizePrinterId(config.printerId || `${config.businessName}-printer-1`)
                         });
                         // Guardar inmediatamente en localStorage
                         localStorage.setItem('printer_name', newPrinterName);
-                        localStorage.setItem('printer_id', config.printerId || `${config.businessName?.toLowerCase().replace(/\s+/g, '-')}-printer-1`);
+                        localStorage.setItem('printer_id', normalizePrinterId(config.printerId || `${config.businessName}-printer-1`));
                       }}
                       className={`w-full p-4 rounded-lg border-2 text-left transition-all ${config.printerName === (printer.name || printer)
-                        ? 'border-blue-500 bg-blue-50 shadow-md'
-                        : 'border-gray-200 hover:border-blue-300'
+                        ? 'border-slate-700 bg-slate-50 shadow-sm'
+                        : 'border-slate-200 hover:border-slate-400'
                         }`}
                     >
                       <div className="flex items-center">
-                        <Printer className={`h-6 w-6 mr-3 ${config.printerName === (printer.name || printer) ? 'text-blue-600' : 'text-gray-600'}`} />
+                        <Printer className={`h-6 w-6 mr-3 ${config.printerName === (printer.name || printer) ? 'text-slate-700' : 'text-slate-500'}`} />
                         <div className="flex-1">
-                          <div className="font-semibold text-gray-900">
+                          <div className="font-semibold text-slate-900">
                             {printer.name || printer}
                           </div>
                           {printer.displayName && (
-                            <div className="text-sm text-gray-500">
+                            <div className="text-sm text-slate-500">
                               {printer.displayName}
                             </div>
                           )}
                         </div>
                         {config.printerName === (printer.name || printer) && (
-                          <Check className="h-6 w-6 text-blue-600 ml-auto" />
+                          <Check className="h-6 w-6 text-slate-700 ml-auto" />
                         )}
                       </div>
                     </button>
@@ -495,15 +376,16 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
                     <label className="label">ID de impresora (para Supabase)</label>
                     <input
                       type="text"
-                      className="input text-white bg-gray-700 placeholder-gray-400 border-gray-600"
-                      placeholder="mi-negocio-printer-1"
+                    className="input text-sm"
+                    placeholder="Ej: mi-negocio-caja-1"
                       value={config.printerId}
                       onChange={(e) => {
-                        setConfig({ ...config, printerId: e.target.value });
-                        localStorage.setItem('printer_id', e.target.value);
+                        const normalized = normalizePrinterId(e.target.value);
+                        setConfig({ ...config, printerId: normalized });
+                        localStorage.setItem('printer_id', normalized);
                       }}
                     />
-                    <p className="text-sm text-gray-500 mt-1">
+                    <p className="text-sm text-slate-500 mt-1">
                       Este ID debe coincidir con el configurado en Supabase
                     </p>
                   </div>
@@ -511,11 +393,11 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
               )}
 
               {/* Botón de actualizar lista al final */}
-              <div className="flex justify-end pt-4 border-t border-gray-200">
+              <div className="flex justify-end pt-4 border-t border-slate-200">
                 <button
                   onClick={() => loadPrinters()}
                   disabled={loadingPrinters}
-                  className="px-4 py-2 text-sm text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  className="btn btn-secondary text-xs px-3 py-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {loadingPrinters ? 'Buscando...' : 'Actualizar lista'}
                 </button>
@@ -525,41 +407,37 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
 
           {currentStep === 'complete' && (
             <div className="space-y-6 text-center">
-              <div className="bg-green-50 rounded-full p-6 w-24 h-24 mx-auto flex items-center justify-center">
-                <Check className="h-12 w-12 text-green-600" />
+              <div className="bg-emerald-50 rounded-full p-6 w-24 h-24 mx-auto flex items-center justify-center border border-emerald-200">
+                <Check className="h-12 w-12 text-emerald-600" />
               </div>
 
-              <h3 className="text-2xl font-bold text-gray-900">
+              <h3 className="text-xl font-semibold text-slate-900">
                 ¡Todo listo!
               </h3>
 
-              <p className="text-lg text-gray-600">
+              <p className="text-base text-slate-600">
                 Tu agente de impresión está configurado y listo para usar
               </p>
 
-              <div className="bg-gray-50 rounded-lg p-6 text-left space-y-3">
-                <h4 className="font-semibold text-gray-900 mb-3">Resumen de configuración:</h4>
+              <div className="bg-slate-50 rounded-md p-6 text-left space-y-3 border border-slate-200">
+                <h4 className="font-semibold text-slate-900 mb-3">Resumen de configuración:</h4>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Negocio:</span>
+                  <span className="text-slate-600">Negocio:</span>
                   <span className="font-semibold">{config.businessName}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Supabase:</span>
-                  <span className="font-semibold text-green-600">Conectado</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-600">Impresora:</span>
+                  <span className="text-slate-600">Impresora:</span>
                   <span className="font-semibold">{config.printerName}</span>
                 </div>
                 <div className="flex justify-between">
-                  <span className="text-gray-600">Printer ID:</span>
+                  <span className="text-slate-600">Printer ID:</span>
                   <span className="font-mono text-sm">{config.printerId}</span>
                 </div>
               </div>
 
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-left">
-                <h4 className="font-semibold text-blue-900 mb-2">Al hacer clic en Finalizar:</h4>
-                <ul className="space-y-1 text-blue-800 text-sm">
+              <div className="bg-slate-50 border border-slate-200 rounded-md p-4 text-left">
+                <h4 className="font-semibold text-slate-900 mb-2">Al hacer clic en Finalizar:</h4>
+                <ul className="space-y-1 text-slate-700 text-sm">
                   <li>• Se guarda la configuración y la impresora queda registrada en el agente</li>
                   <li>• Si el agente está iniciado, ya podés imprimir. Si no, iniciá el agente y listo</li>
                 </ul>
@@ -569,11 +447,11 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
         </div>
 
         {/* Footer con botones */}
-        <div className="bg-gray-50 px-8 py-6 flex justify-between items-center border-t border-gray-200">
+        <div className="bg-slate-50 px-5 py-3 flex justify-between items-center border-t border-slate-200">
           {currentStep !== 'welcome' ? (
             <button
               onClick={handleBack}
-              className="group flex items-center gap-2 px-6 py-3 text-gray-700 bg-white border-2 border-gray-300 rounded-xl font-semibold text-base transition-all duration-200 hover:bg-gray-50 hover:border-gray-400 hover:shadow-md active:scale-95"
+              className="btn btn-secondary group flex items-center gap-2 px-4 py-2 text-sm font-semibold"
             >
               <ChevronLeft className="h-5 w-5 transition-transform duration-200 group-hover:-translate-x-0.5" />
               <span>Atrás</span>
@@ -583,7 +461,7 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
           <button
             onClick={handleNext}
             disabled={!canProceed() || finishing}
-            className="group flex items-center gap-2 px-8 py-3 text-white bg-gradient-to-r from-blue-600 to-indigo-600 rounded-xl font-semibold text-base shadow-lg transition-all duration-200 hover:from-blue-700 hover:to-indigo-700 hover:shadow-xl hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 disabled:hover:shadow-lg"
+            className="btn btn-primary group flex items-center gap-2 px-5 py-2 text-sm font-semibold disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <span>{finishing ? 'Guardando...' : currentStep === 'complete' ? 'Finalizar' : 'Siguiente'}</span>
             <ChevronRight className="h-5 w-5 transition-transform duration-200 group-hover:translate-x-1" />

@@ -262,6 +262,11 @@ class PrinterManager {
         // Restaurar cada configuración
         for (const [printerId, config] of Object.entries(savedConfigs)) {
           try {
+            const printerName = String(config.printerName || '');
+            if (this.isVirtualPrinterName(printerName)) {
+              logger.warn(`Saltando impresora virtual guardada: ${printerId} (${printerName})`);
+              continue;
+            }
             // Reconstruir el device según el tipo
             let device;
             if (config.type === 'network') {
@@ -293,6 +298,18 @@ class PrinterManager {
     } catch (error) {
       logger.warn('Error al cargar configuraciones guardadas:', error.message);
     }
+  }
+
+  isVirtualPrinterName(name) {
+    const n = String(name || '').toLowerCase();
+    if (!n) return true;
+    return (
+      n.includes('anydesk') ||
+      (n.includes('pdf') && n.includes('print')) ||
+      n.includes('xps') ||
+      n.includes('fax') ||
+      n.includes('onenote')
+    );
   }
 
   /**
@@ -398,12 +415,35 @@ class PrinterManager {
    */
   getPrinter(config) {
     const { printerId, type = 'usb' } = config;
+    const printerName = String(config.printerName || '');
+
+    if (type !== 'network' && this.isVirtualPrinterName(printerName)) {
+      throw new Error(`Impresora virtual no permitida: ${printerName}`);
+    }
 
     // Si ya existe una conexión para este printerId, la reutilizamos
     // Esto evita configurar la misma impresora varias veces
     if (this.printers.has(printerId)) {
-      logger.info(`Reutilizando impresora existente: ${printerId}`);
-      return this.printers.get(printerId);
+      const existing = this.printers.get(printerId);
+      const existingCfg = existing?.config || {};
+      const nextType = type || 'usb';
+      const nextName = config.printerName || '';
+      const nextPort = config.port || config.printerPort || '';
+      const nextIp = config.ip || '';
+
+      const sameConfig =
+        (existingCfg.type || 'usb') === nextType &&
+        (existingCfg.printerName || '') === nextName &&
+        String(existingCfg.port || '') === String(nextPort) &&
+        String(existingCfg.ip || '') === String(nextIp);
+
+      if (sameConfig) {
+        logger.info(`Reutilizando impresora existente: ${printerId}`);
+        return existing;
+      }
+
+      logger.info(`Reconfigurando impresora existente: ${printerId}`);
+      this.printers.delete(printerId);
     }
 
     let device;

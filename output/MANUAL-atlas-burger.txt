@@ -41,12 +41,7 @@ Paso 1: Información del Negocio
    • Nombre: Atlas Burger
    • Este nombre aparecerá en los tickets
 
-Paso 2: Conexión a Supabase
-   • URL de Supabase: (proporcionada por soporte técnico)
-   • Clave de acceso: (proporcionada por soporte técnico)
-   • Presiona "Probar Conexión" para verificar
-
-Paso 3: Seleccionar Impresora
+Paso 2: Seleccionar Impresora
    • Selecciona: EPSON TM-T20III Receipt
    • ID de impresora: atlas-burger-printer-1
    • Presiona "Finalizar"

@@ -21,7 +21,7 @@
     "ubicacion": "Cocina"
   },
   "aplicacion": {
-    "nombreApp": "Agente de Impresion de KaruBox",
+    "nombreApp": "Agente KaruBox",
     "version": "1.0.0",
     "vercelUrl": "https://lomiteria1-0.vercel.app",
     "autoInicio": false

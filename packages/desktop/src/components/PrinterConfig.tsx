@@ -6,6 +6,18 @@ interface Printer {
   portName: string;
 }
 
+function normalizePrinterId(value: string): string {
+  if (!value) return '';
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/burguer/g, 'burger')
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-_]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
 export default function PrinterConfig() {
   const [printers, setPrinters] = useState<Printer[]>([]);
   const [loading, setLoading] = useState(false);
@@ -35,7 +47,7 @@ export default function PrinterConfig() {
         if (envResult.success && envResult.data) {
           // El PRINTER_ID puede estar en el .env
           if (envResult.data.PRINTER_ID && !savedPrinterId) {
-            savedPrinterId = envResult.data.PRINTER_ID;
+            savedPrinterId = normalizePrinterId(envResult.data.PRINTER_ID);
           }
         }
       } catch (error) {
@@ -45,10 +57,10 @@ export default function PrinterConfig() {
 
     // Establecer printerId
     if (savedPrinterId) {
-      setPrinterId(savedPrinterId);
+      setPrinterId(normalizePrinterId(savedPrinterId));
     } else if (savedBusinessName) {
       // Generar printerId por defecto basado en business name
-      const defaultId = `${savedBusinessName.toLowerCase().replace(/\s+/g, '-')}-printer-1`;
+      const defaultId = normalizePrinterId(`${savedBusinessName}-printer-1`);
       setPrinterId(defaultId);
     } else {
       // Fallback al valor por defecto
@@ -109,8 +121,9 @@ export default function PrinterConfig() {
 
     setSaving(true);
     try {
+      const normalizedPrinterId = normalizePrinterId(printerId);
       const result = await window.electronAPI.configurePrinter({
-        printerId,
+        printerId: normalizedPrinterId,
         type: 'usb',
         printerName: selectedPrinter,
       });
@@ -120,7 +133,7 @@ export default function PrinterConfig() {
         setTimeout(() => setSaved(false), 2000);
         
         // Guardar también en localStorage para persistencia
-        localStorage.setItem('printer_id', printerId);
+        localStorage.setItem('printer_id', normalizedPrinterId);
         localStorage.setItem('printer_name', selectedPrinter);
         
         // Mostrar advertencia si el agente no está disponible pero se guardó localmente
@@ -153,7 +166,7 @@ export default function PrinterConfig() {
     setTestResult(null);
     
     try {
-      const result = await window.electronAPI.testPrint(printerId);
+      const result = await window.electronAPI.testPrint(normalizePrinterId(printerId));
       
       if (result.success) {
         setTestResult({ success: true, message: result.message || 'Impresión de prueba enviada correctamente' });
@@ -171,27 +184,24 @@ export default function PrinterConfig() {
   };
 
   return (
-    <div className="card max-w-2xl">
-      <h2 className="text-xl font-semibold mb-6">Configuración de Impresora</h2>
+    <div className="card max-w-2xl h-full overflow-hidden">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-base font-semibold">Configuración de impresora</h2>
+        <button onClick={loadPrinters} disabled={loading} className="btn btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1.5">
+          {loading ? <Loader className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />}
+          {loading ? 'Buscando...' : 'Actualizar'}
+        </button>
+      </div>
 
-      <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className="label">Impresoras Disponibles</label>
+          <label className="label">Impresora del sistema (Windows)</label>
           {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <Loader className="h-6 w-6 animate-spin text-primary-600" />
-              <span className="ml-2 text-gray-500">Cargando impresoras...</span>
-            </div>
-          ) : printers.length === 0 ? (
-            <div className="p-4 bg-yellow-50 rounded-lg text-yellow-800 text-sm">
-              No se encontraron impresoras. Asegúrate de que la impresora esté instalada en Windows.
+            <div className="h-10 border border-slate-200 rounded-md flex items-center justify-center text-sm text-slate-500">
+              <Loader className="h-4 w-4 animate-spin mr-2" /> Cargando...
             </div>
           ) : (
-            <select
-              className="input"
-              value={selectedPrinter}
-              onChange={(e) => setSelectedPrinter(e.target.value)}
-            >
+            <select className="input text-sm" value={selectedPrinter} onChange={(e) => setSelectedPrinter(e.target.value)}>
               <option value="">Selecciona una impresora</option>
               {printers.map((printer, index) => (
                 <option key={index} value={printer.name}>
@@ -200,93 +210,36 @@ export default function PrinterConfig() {
               ))}
             </select>
           )}
-          <button
-            onClick={loadPrinters}
-            disabled={loading}
-            className="mt-2 text-sm text-primary-600 hover:text-primary-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
-          >
-            {loading ? (
-              <>
-                <Loader className="h-3 w-3 animate-spin" />
-                <span>Buscando...</span>
-              </>
-            ) : (
-              <span>Actualizar lista</span>
-            )}
-          </button>
+          {printers.length === 0 && !loading && (
+            <p className="mt-2 text-xs text-amber-700">No se detectaron impresoras instaladas en Windows.</p>
+          )}
         </div>
 
         <div>
-          <label className="label">Printer ID</label>
-          <input
-            type="text"
-            className="input"
-            placeholder="atlas-burger-printer-1"
-            value={printerId}
-            onChange={(e) => setPrinterId(e.target.value)}
-          />
-          <p className="mt-1 text-sm text-gray-500">
-            ID único que identifica esta impresora (debe coincidir con el configurado en Supabase)
-          </p>
-        </div>
-
-        <div className="flex space-x-3">
-          <button
-            onClick={saveConfiguration}
-            disabled={saving || !selectedPrinter || !printerId}
-            className="btn btn-primary flex items-center space-x-2 disabled:opacity-50"
-          >
-            {saving ? (
-              <>
-                <Loader className="h-4 w-4 animate-spin" />
-                <span>Guardando...</span>
-              </>
-            ) : (
-              <>
-                <Save className="h-4 w-4" />
-                <span>{saved ? 'Guardado ✓' : 'Guardar Configuración'}</span>
-              </>
-            )}
-          </button>
-
-          <button
-            onClick={testPrint}
-            disabled={testing || !printerId}
-            className="btn btn-secondary flex items-center space-x-2 disabled:opacity-50"
-          >
-            {testing ? (
-              <>
-                <Loader className="h-4 w-4 animate-spin" />
-                <span>Imprimiendo...</span>
-              </>
-            ) : (
-              <>
-                <Printer className="h-4 w-4" />
-                <span>Probar Impresión</span>
-              </>
-            )}
-          </button>
-        </div>
-
-        {testResult && (
-          <div className={`p-4 rounded-lg ${
-            testResult.success 
-              ? 'bg-green-50 text-green-800' 
-              : 'bg-red-50 text-red-800'
-          }`}>
-            <p className="text-sm font-medium">
-              {testResult.success ? '✅ ' : '❌ '}
-              {testResult.message}
-            </p>
-          </div>
-        )}
-
-        <div className="mt-6 p-4 bg-blue-50 rounded-lg">
-          <p className="text-sm text-blue-800">
-            <strong>Nota:</strong> El Printer ID debe coincidir exactamente con el configurado en la tabla <code>printer_config</code> de Supabase.
-          </p>
+          <label className="label">Identificador de impresora (Printer ID)</label>
+          <input type="text" className="input text-sm" placeholder="Ej: mi-negocio-caja-1" value={printerId} onChange={(e) => setPrinterId(normalizePrinterId(e.target.value))} />
+          <p className="mt-2 text-xs text-slate-500">Debe coincidir exactamente con el valor configurado en tu base de datos.</p>
         </div>
       </div>
+
+      <div className="flex gap-2 mt-4">
+        <button onClick={saveConfiguration} disabled={saving || !selectedPrinter || !printerId} className="btn btn-primary text-xs px-3 py-2 flex items-center gap-1.5 disabled:opacity-50">
+          {saving ? <Loader className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+          {saved ? 'Guardado' : 'Guardar configuración'}
+        </button>
+
+        <button onClick={testPrint} disabled={testing || !printerId} className="btn btn-secondary text-xs px-3 py-2 flex items-center gap-1.5 disabled:opacity-50">
+          {testing ? <Loader className="h-3.5 w-3.5 animate-spin" /> : <Printer className="h-3.5 w-3.5" />}
+          {testing ? 'Enviando prueba...' : 'Enviar prueba'}
+        </button>
+      </div>
+
+      {testResult && (
+        <div className={`mt-3 p-2.5 rounded-md text-sm ${testResult.success ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}>
+          {testResult.success ? '✅ ' : '❌ '}
+          {testResult.message}
+        </div>
+      )}
     </div>
   );
 }

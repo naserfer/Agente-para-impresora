@@ -58,6 +58,37 @@ class SupabaseRealtimeListener {
     this.pollingInterval = null;
   }
 
+  async sleep(ms) {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async fetchFacturaWithRetry(lomiteriaId, pedidoId, options = {}) {
+    const maxAttempts = Number(options.maxAttempts || process.env.FACTURA_RETRY_ATTEMPTS || 6);
+    const delayMs = Number(options.delayMs || process.env.FACTURA_RETRY_DELAY_MS || 1500);
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const { data: factRows, error: factError } = await this.supabase
+        .from('vista_factura_impresion')
+        .select('*')
+        .eq('tenant_id', lomiteriaId)
+        .eq('pedido_id', pedidoId)
+        .limit(1);
+
+      if (factError) {
+        return { factura: null, error: factError, attempts: attempt };
+      }
+      if (factRows && factRows.length > 0) {
+        return { factura: factRows[0], error: null, attempts: attempt };
+      }
+
+      if (attempt < maxAttempts) {
+        await this.sleep(delayMs);
+      }
+    }
+
+    return { factura: null, error: null, attempts: maxAttempts };
+  }
+
   getStatus() {
     if (!this.supabase) {
       return { configured: false, error: this.configError?.message || 'Sin SUPABASE_URL o SUPABASE_ANON_KEY' };
@@ -676,22 +707,23 @@ class SupabaseRealtimeListener {
 
       if (!kitchenOnly) {
         try {
-          const { data: factRows, error: factError } = await this.supabase
-            .from('vista_factura_impresion')
-            .select('*')
-            .eq('tenant_id', lomiteriaId)
-            .eq('pedido_id', order.id)
-            .limit(1);
+          const facturaLookup = await this.fetchFacturaWithRetry(lomiteriaId, order.id, {
+            maxAttempts: invoiceOnly ? 8 : 6
+          });
 
-          if (factError) {
+          if (facturaLookup.error) {
+            const factError = facturaLookup.error;
             logger.debug(`[Factura] Pedido #${num}: error consultando vista_factura_impresion: ${factError.message}`, { service: 'supabase-listener' });
-          } else if (factRows && factRows.length > 0) {
-            const factura = factRows[0];
+          } else if (facturaLookup.factura) {
+            const factura = facturaLookup.factura;
             logger.info(`[Factura] Pedido #${num}: factura encontrada, imprimiendo`, { service: 'supabase-listener' });
             const facturaBuffer = TicketGenerator.generateParaguayInvoice(factura);
             await printerManager.print(printerId, facturaBuffer);
           } else {
-            logger.debug(`[Factura] Pedido #${num}: no hay fila en vista_factura_impresion (aún no facturado o sin factura)`, { service: 'supabase-listener' });
+            logger.warn(
+              `[Factura] Pedido #${num}: no hay fila en vista_factura_impresion tras ${facturaLookup.attempts} intento(s)`,
+              { service: 'supabase-listener' }
+            );
             if (invoiceOnly) {
               logger.warn(`[Reprint factura] Pedido #${num}: sin fila en vista_factura_impresion, nada que imprimir`, { service: 'supabase-listener' });
             }

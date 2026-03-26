@@ -15,6 +15,30 @@ let agentProcess = null;
 let tray = null;
 let isQuitting = false;
 
+function normalizePrinterId(value) {
+  if (!value || typeof value !== 'string') return '';
+  return value
+    .toLowerCase()
+    .trim()
+    .replace(/burguer/g, 'burger')
+    .replace(/\s+/g, '-')
+    .replace(/[^a-z0-9-_]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function isVirtualPrinterName(name) {
+  const n = (name || '').toString().toLowerCase();
+  if (!n) return true;
+  return (
+    n.includes('anydesk') ||
+    (n.includes('pdf') && n.includes('print')) ||
+    n.includes('xps') ||
+    n.includes('fax') ||
+    n.includes('onenote')
+  );
+}
+
 // Crear system tray
 function createTray() {
   const isDev = !app.isPackaged;
@@ -107,12 +131,16 @@ function createTray() {
 }
 
 function createWindow() {
+  // App kiosko/controlado: ocultar menú nativo de Electron (File/Edit/View...)
+  Menu.setApplicationMenu(null);
+
   mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 800,
-    minHeight: 600,
+    width: 980,
+    height: 660,
+    minWidth: 980,
+    minHeight: 660,
     show: false, // No mostrar hasta que esté listo (mejora percepción de velocidad)
+    autoHideMenuBar: true,
     webPreferences: {
       preload: join(__dirname, 'preload.cjs'),
       nodeIntegration: false,
@@ -319,6 +347,29 @@ function spawnAgentProcess() {
       console.log('[MAIN] ✅ Variables de entorno cargadas desde userData');
     } catch (error) {
       console.warn('[MAIN] ⚠️ Error leyendo .env desde userData:', error.message);
+    }
+  }
+
+  // En .exe bloqueado, nunca permitir que userData sobreescriba credenciales compiladas.
+  if (app.isPackaged) {
+    try {
+      const fixedAgentEnvPath = join(agentPath, '.env');
+      if (existsSync(fixedAgentEnvPath)) {
+        const fixedEnvContent = readFileSync(fixedAgentEnvPath, 'utf8');
+        fixedEnvContent.split('\n').forEach((line) => {
+          const clean = line.trim();
+          if (!clean || clean.startsWith('#') || !clean.includes('=')) return;
+          const [key, ...valueParts] = clean.split('=');
+          const value = valueParts.join('=').trim();
+          if (!key || !value) return;
+          if (key.trim().startsWith('SUPABASE_')) {
+            envVars[key.trim()] = value;
+          }
+        });
+        console.log('[MAIN] ✅ Credenciales Supabase fijas cargadas desde agent/.env empaquetado');
+      }
+    } catch (error) {
+      console.warn('[MAIN] ⚠️ No se pudo reforzar credenciales compiladas:', error.message);
     }
   }
 
@@ -919,6 +970,16 @@ ipcMain.handle('get-printers-list', async () => {
 ipcMain.handle('configure-printer', async (event, config) => {
   try {
     const isDevMode = !app.isPackaged;
+    const normalizedPrinterId = normalizePrinterId(config.printerId);
+    if (!normalizedPrinterId) {
+      return { success: false, error: 'printerId inválido' };
+    }
+    if (isVirtualPrinterName(config.printerName)) {
+      return {
+        success: false,
+        error: `La impresora "${config.printerName}" parece virtual. Selecciona la impresora física (Epson/USB).`
+      };
+    }
     
     // Guardar en múltiples lugares para asegurar persistencia
     const userDataPath = join(app.getPath('userData'), 'printer-config.json');
@@ -927,7 +988,7 @@ ipcMain.handle('configure-printer', async (event, config) => {
       : join(process.resourcesPath, 'agent/printers-config.json');
     
     const configData = {
-      printerId: config.printerId,
+      printerId: normalizedPrinterId,
       type: config.type || 'usb',
       printerName: config.printerName,
       savedAt: new Date().toISOString()
@@ -952,10 +1013,19 @@ ipcMain.handle('configure-printer', async (event, config) => {
           console.warn('[MAIN] ⚠️ No se pudo leer configuración existente, creando nueva');
         }
       }
+
+      // Limpiar variantes viejas del mismo printerId (ej: burguer/burger, mayúsculas, espacios)
+      for (const key of Object.keys(agentConfigs)) {
+        const entry = agentConfigs[key] || {};
+        const candidate = normalizePrinterId(entry.printerId || key);
+        if (candidate === normalizedPrinterId && key !== normalizedPrinterId) {
+          delete agentConfigs[key];
+        }
+      }
       
       // Agregar/actualizar la configuración de esta impresora
-      agentConfigs[config.printerId] = {
-        printerId: config.printerId,
+      agentConfigs[normalizedPrinterId] = {
+        printerId: normalizedPrinterId,
         type: config.type || 'usb',
         printerName: config.printerName,
         port: config.port || 'USB'
@@ -973,7 +1043,10 @@ ipcMain.handle('configure-printer', async (event, config) => {
       const url = 'http://127.0.0.1:3001/api/printer/configure';
 
       return new Promise((resolve) => {
-        const postData = JSON.stringify(config);
+        const postData = JSON.stringify({
+          ...config,
+          printerId: normalizedPrinterId
+        });
         const options = {
           method: 'POST',
           headers: {
@@ -989,24 +1062,42 @@ ipcMain.handle('configure-printer', async (event, config) => {
           res.on('end', () => {
             try {
               const json = JSON.parse(data);
-              console.log('[MAIN] ✅ Configuración también enviada al agente');
-              resolve({ success: true, data: json, savedLocally: true });
+              if (res.statusCode === 200) {
+                console.log('[MAIN] ✅ Configuración también enviada al agente');
+                resolve({ success: true, data: json, savedLocally: true });
+              } else {
+                resolve({
+                  success: false,
+                  savedLocally: true,
+                  error: json.error || `El agente respondió con estado ${res.statusCode}`
+                });
+              }
             } catch (e) {
-              // Si falla el parseo, igual está guardado localmente
-              resolve({ success: true, savedLocally: true, warning: 'Guardado localmente, agente no respondió correctamente' });
+              resolve({
+                success: false,
+                savedLocally: true,
+                error: 'Guardado localmente, pero la respuesta del agente no fue válida'
+              });
             }
           });
         });
 
         request.on('error', (error) => {
-          // Si el agente no está disponible, igual está guardado localmente
-          console.log('[MAIN] ⚠️ Agente no disponible, pero configuración guardada localmente');
-          resolve({ success: true, savedLocally: true, warning: 'Guardado localmente, agente no disponible' });
+          console.log('[MAIN] ⚠️ Agente no disponible, configuración guardada solo localmente');
+          resolve({
+            success: false,
+            savedLocally: true,
+            error: `Guardado localmente, pero no se pudo aplicar al agente: ${error.message}`
+          });
         });
 
         request.on('timeout', () => {
           request.destroy();
-          resolve({ success: true, savedLocally: true, warning: 'Guardado localmente, agente no respondió a tiempo' });
+          resolve({
+            success: false,
+            savedLocally: true,
+            error: 'Guardado localmente, pero el agente no respondió a tiempo'
+          });
         });
 
         request.setTimeout(3000);
@@ -1141,7 +1232,8 @@ try {
               'OneNote',
               'XPS Document Writer',
               'Send To OneNote',
-              'Root Print Queue'
+              'Root Print Queue',
+              'AnyDesk Printer'
             ];
             const formattedPrinters = printers
               .filter(p => {
@@ -1250,8 +1342,12 @@ async function tryAgentFallback(resolve) {
 ipcMain.handle('test-print', async (event, printerId) => {
   try {
     const http = await import('http');
+    const normalizedPrinterId = normalizePrinterId(printerId);
+    if (!normalizedPrinterId) {
+      return { success: false, error: 'printerId inválido' };
+    }
     // Usar 127.0.0.1 en lugar de localhost para evitar problemas con IPv6
-    const url = `http://127.0.0.1:3001/api/printer/test/${printerId}`;
+    const url = `http://127.0.0.1:3001/api/printer/test/${normalizedPrinterId}`;
 
     return new Promise((resolve) => {
       const postData = '';
@@ -1327,6 +1423,20 @@ ipcMain.handle('save-env-config', async (event, config) => {
     const userDataEnvPath = join(app.getPath('userData'), '.env');
     const agentEnvPath = isDevMode ? join(__dirname, '../../agent/.env') : null;
 
+    // En .exe bloqueado solo permitimos configuración local del negocio/impresora.
+    if (app.isPackaged) {
+      const editableConfig = {
+        CLIENT_NAME: (config.CLIENT_NAME || '').toString().trim(),
+        PRINTER_ID: normalizePrinterId((config.PRINTER_ID || '').toString().trim()),
+      };
+
+      let envContent = '# Configuración local editable (sin credenciales)\n\n';
+      if (editableConfig.CLIENT_NAME) envContent += `CLIENT_NAME=${editableConfig.CLIENT_NAME}\n`;
+      if (editableConfig.PRINTER_ID) envContent += `PRINTER_ID=${editableConfig.PRINTER_ID}\n`;
+      writeFileSync(userDataEnvPath, envContent, 'utf8');
+      return { success: true, message: 'Configuración local guardada correctamente' };
+    }
+
     const anonKey = config.SUPABASE_ANON_KEY;
     const useSecure = anonKey && safeStorage.isEncryptionAvailable();
 
@@ -1357,20 +1467,34 @@ ipcMain.handle('get-env-config', async () => {
   try {
     const isDevMode = !app.isPackaged;
     const userDataEnvPath = join(app.getPath('userData'), '.env');
-    const agentEnvPath = isDevMode ? join(__dirname, '../../agent/.env') : null;
-
-    let envPath = existsSync(userDataEnvPath) ? userDataEnvPath : (agentEnvPath && existsSync(agentEnvPath) ? agentEnvPath : null);
-    if (!envPath) return { success: false, error: 'No configuration file found' };
+    const agentEnvPath = isDevMode
+      ? join(__dirname, '../../agent/.env')
+      : join(process.resourcesPath, 'agent/.env');
 
     const config = {};
-    readFileSync(envPath, 'utf8').split('\n').forEach(line => {
-      const m = line.match(/^([^=]+)=(.*)$/);
-      if (m) {
-        let v = m[2].trim();
-        if (m[1].trim() === 'SUPABASE_ANON_KEY' && v === '__SECURE__') v = loadSecureAnonKey() || '';
-        config[m[1].trim()] = v;
-      }
-    });
+    const mergeEnvFile = (envPath) => {
+      if (!envPath || !existsSync(envPath)) return;
+      readFileSync(envPath, 'utf8').split('\n').forEach((line) => {
+        const m = line.match(/^([^=]+)=(.*)$/);
+        if (!m) return;
+        const key = m[1].trim();
+        let value = m[2].trim();
+        if (key === 'SUPABASE_ANON_KEY' && value === '__SECURE__') value = loadSecureAnonKey() || '';
+        config[key] = value;
+      });
+    };
+
+    // Prioridad: base fija del agente + overrides locales del usuario.
+    mergeEnvFile(agentEnvPath);
+    mergeEnvFile(userDataEnvPath);
+
+    if (Object.keys(config).length === 0) return { success: false, error: 'No configuration file found' };
+
+    // No exponer la anon key al renderer en modo empaquetado.
+    if (app.isPackaged && config.SUPABASE_ANON_KEY) {
+      config.SUPABASE_ANON_KEY = '***';
+    }
+
     return { success: true, data: config };
   } catch (error) {
     return { success: false, error: error.message };

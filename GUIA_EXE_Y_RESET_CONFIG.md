@@ -2,7 +2,7 @@
 
 Esta guia usa un flujo generico para cualquier local.
 
-## 1) Crear un EXE nuevo (generico)
+## 1) Crear un EXE nuevo (bloqueado por cliente)
 
 ### Paso A: crear/editar config del cliente
 
@@ -14,7 +14,7 @@ Esta guia usa un flujo generico para cualquier local.
 Ejemplo:
 - `cliente-config-mi-local.json`
 
-Edita ese archivo y completa:
+Edita ese archivo y completa (obligatorio):
 - `cliente.nombre`
 - `cliente.slug`
 - `supabase.url`
@@ -49,11 +49,24 @@ Nombre recomendado del instalador generado:
 Tambien se generan archivos en:
 - `output/` (SQL, manual y `.env` de soporte)
 
+## 1.1) Que queda bloqueado vs configurable en el EXE
+
+Bloqueado en build (no editable en la UI):
+- `SUPABASE_URL`
+- `SUPABASE_ANON_KEY`
+- flags tecnicos del agente (`ENABLE_SUPABASE_LISTENER`, `PORT`, etc.)
+
+Configurable por el usuario final:
+- `CLIENT_NAME` (nombre del local)
+- `PRINTER_ID`
+- impresora detectada en Windows
+
 
 ## 2) Resetear configuracion del EXE por consola
 
 No existe un comando separado para "resetear contrasena" solamente.
-El reset disponible limpia la configuracion local completa del agente (incluye credenciales/config de Supabase y config de impresora) para volver al wizard inicial.
+El reset disponible limpia la configuracion local completa del agente para volver al wizard inicial.
+En el flujo bloqueado, las credenciales fijas de Supabase se vuelven a tomar del build al iniciar nuevamente.
 
 ### Comando simple desde carpeta del agente (recomendado)
 
@@ -94,7 +107,7 @@ El codigo de desktop limpia:
 
 Despues del reset, al abrir de nuevo la app:
 - vuelve a mostrarse el Setup Wizard
-- hay que reconfigurar Supabase e impresora
+- hay que reconfigurar nombre local, printer-id e impresora
 
 
 ## 4) Tips rapidos de uso
