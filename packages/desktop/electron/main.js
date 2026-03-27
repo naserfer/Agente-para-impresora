@@ -15,6 +15,10 @@ let agentProcess = null;
 let tray = null;
 let isQuitting = false;
 
+// Identificador de instalación inyectado en el .env del agent por build.
+// Se usa para forzar un reset por usuario Windows cuando se cambia el cliente/build.
+let agentInstallIdFromBuild = null;
+
 function normalizePrinterId(value) {
   if (!value || typeof value !== 'string') return '';
   return value
@@ -37,6 +41,79 @@ function isVirtualPrinterName(name) {
     n.includes('fax') ||
     n.includes('onenote')
   );
+}
+
+function extractEnvValue(envContent, key) {
+  if (!envContent) return null;
+  const re = new RegExp(`^${key}=([^\\r\\n]*)$`, 'm');
+  const match = envContent.match(re);
+  if (!match) return null;
+  return match[1]?.trim() || null;
+}
+
+function loadAgentInstallId() {
+  try {
+    if (!app.isPackaged) return null;
+    const agentEnvPath = join(process.resourcesPath, 'agent', '.env');
+    if (!existsSync(agentEnvPath)) return null;
+    const content = readFileSync(agentEnvPath, 'utf8');
+    return extractEnvValue(content, 'AGENT_INSTALL_ID');
+  } catch (_) {
+    return null;
+  }
+}
+
+function getGlobalPrintersConfigPath() {
+  const appDataPath = process.env.APPDATA || process.env.LOCALAPPDATA || os.homedir();
+  return join(appDataPath, 'Agente de Impresion', 'printers-config.json');
+}
+
+function wipeUserState() {
+  // Se ejecuta antes de levantar agente o UI, para evitar que se carguen configs previas.
+  const userDataEnvPath = join(app.getPath('userData'), '.env');
+  const userDataPrinterConfigPath = join(app.getPath('userData'), 'printer-config.json');
+  const secureKeyPath = getSecureAnonKeyPath();
+  const globalPrintersConfigPath = getGlobalPrintersConfigPath();
+
+  const safeUnlink = (p) => {
+    try {
+      if (p && existsSync(p)) unlinkSync(p);
+    } catch (_) {}
+  };
+
+  safeUnlink(userDataEnvPath);
+  safeUnlink(userDataPrinterConfigPath);
+  safeUnlink(secureKeyPath);
+  safeUnlink(globalPrintersConfigPath);
+}
+
+function ensureInitialWipeForInstallId() {
+  if (!app.isPackaged) return;
+
+  agentInstallIdFromBuild = loadAgentInstallId();
+  const effectiveInstallId = agentInstallIdFromBuild || 'unknown';
+
+  const statePath = join(app.getPath('userData'), '.agent-state.json');
+  let state = null;
+  try {
+    if (existsSync(statePath)) {
+      state = JSON.parse(readFileSync(statePath, 'utf8'));
+    }
+  } catch (_) {
+    state = null;
+  }
+
+  const mismatch = !state || state.installId !== effectiveInstallId;
+  if (mismatch) {
+    wipeUserState();
+    try {
+      writeFileSync(
+        statePath,
+        JSON.stringify({ installId: effectiveInstallId, updatedAt: new Date().toISOString() }, null, 2),
+        'utf8'
+      );
+    } catch (_) {}
+  }
 }
 
 // Crear system tray
@@ -73,8 +150,31 @@ function createTray() {
     }
   }
   
-  // Si no se pudo cargar el icono, usar uno vacío (Electron usará el icono por defecto)
+  // Fallback robusto: intentar ícono del ejecutable o un SVG embebido.
+  // Evita que el tray quede "invisible" cuando falta assets/icon.png.
   if (!trayIcon || trayIcon.isEmpty()) {
+    try {
+      const exeIcon = nativeImage.createFromPath(process.execPath);
+      if (!exeIcon.isEmpty()) {
+        trayIcon = exeIcon.resize({ width: 16, height: 16 });
+      }
+    } catch (_) {}
+  }
+  if (!trayIcon || trayIcon.isEmpty()) {
+    try {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <rect x="1" y="1" width="14" height="14" rx="3" fill="#0f172a"/>
+  <rect x="4" y="4" width="8" height="8" rx="1.5" fill="#f8fafc"/>
+</svg>`;
+      const dataUrl = `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+      const inlineIcon = nativeImage.createFromDataURL(dataUrl);
+      if (!inlineIcon.isEmpty()) {
+        trayIcon = inlineIcon.resize({ width: 16, height: 16 });
+      }
+    } catch (_) {}
+  }
+  if (!trayIcon || trayIcon.isEmpty()) {
+    console.warn('[MAIN] ⚠️ No se pudo construir icono de tray; usando icono vacío');
     trayIcon = nativeImage.createEmpty();
   }
   
@@ -139,6 +239,8 @@ function createWindow() {
     height: 660,
     minWidth: 980,
     minHeight: 660,
+    maximizable: false,
+    fullscreenable: false,
     show: false, // No mostrar hasta que esté listo (mejora percepción de velocidad)
     autoHideMenuBar: true,
     webPreferences: {
@@ -1428,11 +1530,14 @@ ipcMain.handle('save-env-config', async (event, config) => {
       const editableConfig = {
         CLIENT_NAME: (config.CLIENT_NAME || '').toString().trim(),
         PRINTER_ID: normalizePrinterId((config.PRINTER_ID || '').toString().trim()),
+        PRINTER_NAME: (config.PRINTER_NAME || '').toString().trim(),
       };
 
       let envContent = '# Configuración local editable (sin credenciales)\n\n';
       if (editableConfig.CLIENT_NAME) envContent += `CLIENT_NAME=${editableConfig.CLIENT_NAME}\n`;
       if (editableConfig.PRINTER_ID) envContent += `PRINTER_ID=${editableConfig.PRINTER_ID}\n`;
+      if (editableConfig.PRINTER_NAME) envContent += `PRINTER_NAME=${editableConfig.PRINTER_NAME}\n`;
+      if (agentInstallIdFromBuild) envContent += `AGENT_INSTALL_ID=${agentInstallIdFromBuild}\n`;
       writeFileSync(userDataEnvPath, envContent, 'utf8');
       return { success: true, message: 'Configuración local guardada correctamente' };
     }
@@ -1640,6 +1745,9 @@ app.whenReady().then(() => {
     app.quit();
     return;
   }
+
+  // Forzar wipe inicial por usuario Windows cuando cambia el build/cliente
+  ensureInitialWipeForInstallId();
 
   // Configurar autostart (iniciar con Windows)
   app.setLoginItemSettings({

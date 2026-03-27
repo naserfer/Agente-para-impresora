@@ -36,16 +36,28 @@ function App() {
   useEffect(() => {
     if (!window.electronAPI?.getEnvConfig) return;
     window.electronAPI.getEnvConfig().then((res) => {
-      const hasLocalSetup = !!localStorage.getItem('setup_completed');
-      const hasLocalPrinterId = !!localStorage.getItem('printer_id');
-      const hasLocalPrinterName = !!localStorage.getItem('printer_name');
-      const hasLocalBusinessName = !!localStorage.getItem('business_name');
-
       if (!res.success || !res.data?.SUPABASE_URL) {
         localStorage.removeItem('setup_completed');
         setShowWizard(true);
-      } else if (!hasLocalSetup || !hasLocalPrinterId || !hasLocalPrinterName || !hasLocalBusinessName) {
+        return;
+      }
+
+      const clientName = res.data?.CLIENT_NAME;
+      const printerId = res.data?.PRINTER_ID;
+      const printerName = res.data?.PRINTER_NAME;
+
+      const missingLocalConfig = !clientName || !printerId || !printerName;
+
+      if (missingLocalConfig) {
+        localStorage.removeItem('setup_completed');
         setShowWizard(true);
+      } else {
+        // Mantener localStorage sincronizado para UI (pero la decisión del wizard no depende de localStorage)
+        localStorage.setItem('setup_completed', 'true');
+        localStorage.setItem('business_name', clientName);
+        localStorage.setItem('printer_id', printerId);
+        localStorage.setItem('printer_name', printerName);
+        setShowWizard(false);
       }
     });
   }, []);
@@ -215,9 +227,13 @@ function App() {
     }
   };
 
-  // Mostrar wizard si es la primera vez
+  // Mostrar wizard si es la primera vez (contenedor fijo a la ventana para que no se desborde)
   if (showWizard) {
-    return <SetupWizard key={wizardKey} onComplete={handleWizardComplete} />;
+    return (
+      <div className="h-screen w-full min-h-0 overflow-hidden flex flex-col bg-slate-100">
+        <SetupWizard key={wizardKey} onComplete={handleWizardComplete} />
+      </div>
+    );
   }
 
   return (

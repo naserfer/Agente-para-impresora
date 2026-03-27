@@ -62,6 +62,28 @@ class SupabaseRealtimeListener {
     await new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  /**
+   * Impresión automática (pedido FACT / polling): solo si el pedido se creó dentro de la ventana reciente.
+   * Evita imprimir backlog al conectar el agente. Reimpresiones explícitas usan skipAgeCheck o reprintSolicitudId.
+   * PRINT_ORDER_MAX_AGE_MINUTES (default 10). 0 = sin límite.
+   */
+  isAutomaticPrintBlockedByOrderAge(order) {
+    const raw = process.env.PRINT_ORDER_MAX_AGE_MINUTES;
+    const maxMin = raw === undefined || raw === '' ? 10 : parseInt(String(raw), 10);
+    if (!Number.isFinite(maxMin) || maxMin <= 0) return false;
+
+    const created = order?.created_at;
+    if (!created) {
+      return true;
+    }
+    const t = Date.parse(created);
+    if (Number.isNaN(t)) {
+      return true;
+    }
+    const ageMs = Date.now() - t;
+    return ageMs > maxMin * 60 * 1000;
+  }
+
   async fetchFacturaWithRetry(lomiteriaId, pedidoId, options = {}) {
     const maxAttempts = Number(options.maxAttempts || process.env.FACTURA_RETRY_ATTEMPTS || 6);
     const delayMs = Number(options.delayMs || process.env.FACTURA_RETRY_DELAY_MS || 1500);
@@ -87,6 +109,72 @@ class SupabaseRealtimeListener {
     }
 
     return { factura: null, error: null, attempts: maxAttempts };
+  }
+
+  /**
+   * Obtiene ítems de cocina con modificaciones (recetas/extras/quitados).
+   * Si llegan sin modificaciones (vacío/null) muy rápido después de pasar a FACT,
+   * reintenta unas veces para cubrir propagación/latencia de la app + vistas.
+   */
+  async fetchKitchenItemsWithRetry(pedidoId, pedidoAgeMs, options = {}) {
+    const maxAttempts = Number(options.maxAttempts || process.env.KITCHEN_ITEMS_RETRY_ATTEMPTS || 6);
+    const delayMs = Number(options.delayMs || process.env.KITCHEN_ITEMS_RETRY_DELAY_MS || 1500);
+    const freshnessMs = Number(options.freshnessMs || process.env.KITCHEN_ITEMS_FRESHNESS_MS || 30000);
+
+    // Solo reintentar si el pedido todavía "es reciente" (primeros segundos tras FACT).
+    // En reimpresiones típicamente ya estará resuelto, evitando esperas innecesarias.
+    const allowRetryByFreshness = pedidoAgeMs == null ? true : pedidoAgeMs < freshnessMs;
+
+    let lastItems = [];
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const { data: items, error: itemsError } = await this.supabase
+        .from('vista_items_ticket_cocina')
+        .select('producto_nombre, cantidad, modificaciones')
+        .eq('pedido_id', pedidoId)
+        .order('item_pedido_id', { ascending: true });
+
+      if (itemsError) {
+        if (attempt < maxAttempts && allowRetryByFreshness) {
+          if (attempt > 1) {
+            logger.debug(
+              `[KitchenItemsRetry] Pedido ${pedidoId}: error al consultar items (intent ${attempt}/${maxAttempts}, ageMs=${pedidoAgeMs ?? 'n/a'})`,
+              { service: 'supabase-listener' }
+            );
+          }
+          await this.sleep(delayMs);
+          continue;
+        }
+        return { items: lastItems, error: itemsError, attempts: attempt };
+      }
+
+      lastItems = items || [];
+
+      // Si existen filas pero todas vienen sin modificaciones, es el caso que queremos esperar.
+      const hasRows = lastItems.length > 0;
+      const allModificationsEmpty = hasRows
+        ? lastItems.every((it) => !it.modificaciones || String(it.modificaciones).trim().length === 0)
+        : true;
+
+      if (hasRows && !allModificationsEmpty) {
+        return { items: lastItems, error: null, attempts: attempt };
+      }
+
+      if (attempt < maxAttempts && allowRetryByFreshness) {
+        if (attempt > 1) {
+          logger.debug(
+            `[KitchenItemsRetry] Pedido ${pedidoId}: esperando modificaciones (intent ${attempt}/${maxAttempts}, ageMs=${pedidoAgeMs ?? 'n/a'}, rows=${lastItems.length})`,
+            { service: 'supabase-listener' }
+          );
+        }
+        await this.sleep(delayMs);
+        continue;
+      }
+
+      return { items: lastItems, error: null, attempts: attempt };
+    }
+
+    return { items: lastItems, error: null, attempts: maxAttempts };
   }
 
   getStatus() {
@@ -525,7 +613,7 @@ class SupabaseRealtimeListener {
       return;
     }
 
-    await this.printOrder(pedido, { invoiceOnly: true });
+    await this.printOrder(pedido, { invoiceOnly: true, skipAgeCheck: true });
   }
 
   async pollRecentFacturaBumps() {
@@ -664,15 +752,29 @@ class SupabaseRealtimeListener {
   /**
    * Obtiene la configuración de impresora y imprime el pedido
    * @param {Object} order - Fila pedidos
-   * @param {{ kitchenOnly?: boolean, invoiceOnly?: boolean, reprintSolicitudId?: string }} [options]
+   * @param {{ kitchenOnly?: boolean, invoiceOnly?: boolean, reprintSolicitudId?: string, skipAgeCheck?: boolean }} [options]
    */
   async printOrder(order, options = {}) {
-    const { kitchenOnly = false, invoiceOnly = false, reprintSolicitudId = null } = options;
+    const { kitchenOnly = false, invoiceOnly = false, reprintSolicitudId = null, skipAgeCheck = false } = options;
     const num = order.numero_pedido ?? order.id;
     try {
       const lomiteriaId = order.tenant_id || order.lomiteria_id || order.tenantId;
       if (!lomiteriaId) {
         logger.warn(`[NO IMPRIME] Pedido #${num}: sin tenant_id/lomiteria_id`, { service: 'supabase-listener' });
+        return;
+      }
+
+      const bypassAge = skipAgeCheck === true || !!reprintSolicitudId;
+      if (!bypassAge && this.isAutomaticPrintBlockedByOrderAge(order)) {
+        const created = order.created_at ? Date.parse(order.created_at) : NaN;
+        const ageMin = Number.isNaN(created) ? '?' : Math.round((Date.now() - created) / 60000);
+        const maxMin = process.env.PRINT_ORDER_MAX_AGE_MINUTES === undefined || process.env.PRINT_ORDER_MAX_AGE_MINUTES === ''
+          ? 10
+          : parseInt(String(process.env.PRINT_ORDER_MAX_AGE_MINUTES), 10);
+        logger.info(
+          `[CicloVida] Pedido #${num} no imprimido: creado hace ~${ageMin} min (ventana máx. ${Number.isFinite(maxMin) && maxMin > 0 ? maxMin : 10} min desde created_at). Solo aplica a impresión automática.`,
+          { service: 'supabase-listener' }
+        );
         return;
       }
 
@@ -770,12 +872,22 @@ class SupabaseRealtimeListener {
    */
   async convertOrderToTicketFormat(order) {
     try {
-      // Obtener ítems con modificaciones desde la vista (no solo items_pedido)
-      const { data: items, error: itemsError } = await this.supabase
-        .from('vista_items_ticket_cocina')
-        .select('producto_nombre, cantidad, modificaciones')
-        .eq('pedido_id', order.id)
-        .order('item_pedido_id', { ascending: true });
+      // Edad aproximada del pedido: sirve para decidir si vale la pena reintentar.
+      let pedidoAgeMs = null;
+      try {
+        const ts = order.updated_at || order.created_at;
+        if (ts) pedidoAgeMs = Date.now() - new Date(ts).getTime();
+      } catch (_) {}
+
+      // Obtener ítems con modificaciones desde la vista (no solo items_pedido).
+      // Si llega "demasiado rápido" sin modificaciones, esperamos y reconsultamos.
+      const kitchenLookup = await this.fetchKitchenItemsWithRetry(order.id, pedidoAgeMs, {
+        // Ajuste rápido por default; se puede sobreescribir via env si lo necesitás.
+        maxAttempts: process.env.KITCHEN_ITEMS_RETRY_ATTEMPTS ? undefined : 6
+      });
+
+      const items = kitchenLookup.items || [];
+      const itemsError = kitchenLookup.error;
 
       if (itemsError) {
         logger.warn(`Error al obtener items del pedido ${order.id}: ${itemsError.message}`, { 

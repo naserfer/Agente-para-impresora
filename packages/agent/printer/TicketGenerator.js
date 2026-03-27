@@ -270,6 +270,32 @@ class TicketGenerator {
   }
 
   /**
+   * Ticket mínimo ESC/POS solo para verificar conexión (test desde UI).
+   */
+  static generateConnectionTest() {
+    const device = new VirtualDevice();
+    const printer = new escpos.Printer(device);
+    const t = new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+
+    device.open(() => {
+      const esc = Buffer.from([0x1B, 0x74, 0x01]);
+      device.write(esc, () => {});
+      printer
+        .encode('CP850')
+        .align('ct')
+        .style('B')
+        .text(toCP850('PRUEBA OK\n'))
+        .style('NORMAL')
+        .text(toCP850(`${t}\n`))
+        .feed(1)
+        .cut()
+        .close();
+    });
+
+    return device.getBuffer();
+  }
+
+  /**
    * Genera comandos ESC/POS para una factura/recibo de cliente
    * @param {Object} invoiceData - Datos de la factura
    */

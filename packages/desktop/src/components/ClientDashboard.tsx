@@ -161,17 +161,6 @@ export default function ClientDashboard({ agentStatus }: ClientDashboardProps) {
     }
   };
 
-  // Calcular estadísticas compactas
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  
-  const todayPrints = printHistory.filter(entry => {
-    const printDate = new Date(entry.printedAt);
-    return printDate >= today;
-  });
-
-  const totalToday = todayPrints.reduce((sum, entry) => sum + (entry.total || 0), 0);
-
   // Formatear tiempo transcurrido
   const formatTimeAgo = (dateString: string) => {
     const date = new Date(dateString);
@@ -185,15 +174,6 @@ export default function ClientDashboard({ agentStatus }: ClientDashboardProps) {
     if (diffMins < 60) return `Hace ${diffMins} minuto${diffMins > 1 ? 's' : ''}`;
     if (diffHours < 24) return `Hace ${diffHours} hora${diffHours > 1 ? 's' : ''}`;
     return `Hace ${diffDays} día${diffDays > 1 ? 's' : ''}`;
-  };
-
-  // Formatear moneda
-  const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('es-PY', {
-      style: 'currency',
-      currency: 'PYG',
-      minimumFractionDigits: 0,
-    }).format(amount);
   };
 
   const displayPrinterName = printerName || (printers.length > 0 
@@ -235,21 +215,6 @@ export default function ClientDashboard({ agentStatus }: ClientDashboardProps) {
               {isRealtimeConnected ? <Activity className="h-4 w-4 text-emerald-600" /> : <Clock className="h-4 w-4 text-amber-600" />}
               <span>{isRealtimeConnected ? 'Conectada' : 'Polling'}</span>
             </div>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-3 gap-2 text-sm">
-          <div className="rounded-md border border-slate-200 p-3">
-            <p className="text-slate-500">Pedidos hoy</p>
-            <p className="text-2xl font-semibold">{todayPrints.length}</p>
-          </div>
-          <div className="rounded-md border border-slate-200 p-3">
-            <p className="text-slate-500">Total hoy</p>
-            <p className="text-lg font-semibold truncate">{formatCurrency(totalToday)}</p>
-          </div>
-          <div className="rounded-md border border-slate-200 p-3">
-            <p className="text-slate-500">Histórico</p>
-            <p className="text-2xl font-semibold">{printHistory.length}</p>
           </div>
         </div>
 

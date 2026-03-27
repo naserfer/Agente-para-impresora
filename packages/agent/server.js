@@ -360,32 +360,8 @@ app.post('/api/printer/test/:printerId', async (req, res) => {
       });
     }
 
-    // Generar ticket de prueba con formato mejorado
-    const testTicket = TicketGenerator.generateKitchenTicket({
-      orderId: 'TEST',
-      lomiteriaName: 'PRUEBA DE CONEXIÓN',
-      orderType: 'local',
-      customerName: 'Cliente de Prueba',
-      createdAt: new Date().toISOString(),
-      items: [
-        { 
-          name: 'Hamburguesa Clásica', 
-          quantity: 2,
-          notes: 'Sin cebolla, extra queso'
-        },
-        { 
-          name: 'Papas Fritas', 
-          quantity: 1,
-          notes: null
-        },
-        { 
-          name: 'Coca Cola', 
-          quantity: 2,
-          notes: null
-        }
-      ],
-      orderNotes: 'Este es un ticket de prueba para verificar la impresora'
-    });
+    // ESC/POS mínimo: ver packages/agent/printer/TicketGenerator.js → generateConnectionTest()
+    const testTicket = TicketGenerator.generateConnectionTest();
 
     await printerManager.print(printerId, testTicket);
 

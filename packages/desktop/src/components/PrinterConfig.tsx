@@ -184,7 +184,8 @@ export default function PrinterConfig() {
   };
 
   return (
-    <div className="card max-w-2xl h-full overflow-hidden">
+    <div className="h-full w-full overflow-y-auto overflow-x-hidden py-2">
+      <div className="card max-w-2xl w-full mx-auto overflow-hidden">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-base font-semibold">Configuración de impresora</h2>
         <button onClick={loadPrinters} disabled={loading} className="btn btn-secondary text-xs px-2.5 py-1.5 flex items-center gap-1.5">
@@ -240,6 +241,7 @@ export default function PrinterConfig() {
           {testResult.message}
         </div>
       )}
+      </div>
     </div>
   );
 }

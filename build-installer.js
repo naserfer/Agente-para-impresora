@@ -112,6 +112,9 @@ function generateEnv(config) {
 # Generado automáticamente - BLOQUEADO EN BUILD
 # No exponer ni editar credenciales en el cliente final
 
+# Identificador de instalación (sirve para detectar cambios de build por usuario Windows)
+AGENT_INSTALL_ID=${config.cliente.slug}
+
 # Conexión a Supabase
 SUPABASE_URL=${config.supabase.url}
 SUPABASE_ANON_KEY=${config.supabase.anonKey}
