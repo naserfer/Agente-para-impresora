@@ -863,7 +863,14 @@ class SupabaseRealtimeListener {
             const factError = facturaLookup.error;
             logger.debug(`[Factura] Pedido #${num}: error consultando vista_factura_impresion: ${factError.message}`, { service: 'supabase-listener' });
           } else if (facturaLookup.factura) {
-            const factura = facturaLookup.factura;
+            const factura = { ...facturaLookup.factura };
+            if (
+              (factura.numero_pedido == null || String(factura.numero_pedido).trim() === '') &&
+              order.numero_pedido != null &&
+              String(order.numero_pedido).trim() !== ''
+            ) {
+              factura.numero_pedido = order.numero_pedido;
+            }
             const facturaBuffer = TicketGenerator.generateParaguayInvoice(factura);
             const isInitialFull =
               !kitchenOnly && !invoiceOnly && !reprintSolicitudId;

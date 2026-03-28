@@ -51,6 +51,87 @@ function splitModificaciones(raw) {
     .filter((part) => part.length > 0);
 }
 
+/** Corta por espacios para que la impresora no parta palabras a mitad de línea. */
+function wrapWords(text, maxChars) {
+  const s = String(text == null ? '' : text).trim();
+  if (!s) return [];
+  const w = Math.max(8, Number(maxChars) || 40);
+  const words = s.split(/\s+/).filter(Boolean);
+  const lines = [];
+  let line = '';
+  for (const word of words) {
+    const candidate = line ? `${line} ${word}` : word;
+    if (candidate.length <= w) {
+      line = candidate;
+    } else {
+      if (line) lines.push(line);
+      if (word.length > w) {
+        let rest = word;
+        while (rest.length > w) {
+          lines.push(rest.slice(0, w));
+          rest = rest.slice(w);
+        }
+        line = rest;
+      } else {
+        line = word;
+      }
+    }
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+/** Primera línea "Nx nombre"; siguientes líneas alineadas bajo el nombre (indent fijo). */
+function wrapQuantityNameLine(cantidad, nombre, maxChars) {
+  const head = `${cantidad}x `;
+  const name = String(nombre || '').trim() || 'Item';
+  const firstMax = Math.max(4, maxChars - head.length);
+  const nameLines = wrapWords(name, firstMax);
+  if (nameLines.length === 0) return [`${head}${name}`];
+  const indent = ' '.repeat(head.length);
+  const out = [`${head}${nameLines[0]}`];
+  for (let i = 1; i < nameLines.length; i += 1) {
+    out.push(`${indent}${nameLines[i]}`);
+  }
+  return out;
+}
+
+/** Línea ítem factura PY: "N  nombre" con continuación indentada (sin cortar palabras). */
+function wrapCantSpaceNombreLine(cant, nombre, maxChars) {
+  const head = `${cant}  `;
+  const name = String(nombre || '').trim() || 'Producto';
+  const firstMax = Math.max(4, maxChars - head.length);
+  const nameLines = wrapWords(name, firstMax);
+  if (nameLines.length === 0) return [`${head}${name}`];
+  const indent = ' '.repeat(head.length);
+  const out = [`${head}${nameLines[0]}`];
+  for (let i = 1; i < nameLines.length; i += 1) {
+    out.push(`${indent}${nameLines[i]}`);
+  }
+  return out;
+}
+
+/** Separador ~80 mm: Font A normal ≈48 cols; con doble ancho ESC/POS (p. ej. size 1,0) ≈24 cols. */
+function kitchenSepFull(char, doubleWidthMode) {
+  const c = String(char || '-').charAt(0);
+  const cols = doubleWidthMode ? 24 : 48;
+  return `${c.repeat(cols)}\n`;
+}
+
+/** Extrae montos tipo (+1,00) o (+1.00) y los muestra como unidades enteras (+1). */
+function formatModifExtraAmounts(str) {
+  return String(str == null ? '' : str).replace(
+    /\(\s*([+-]?\d+)[,.](\d+)\s*\)/g,
+    (match, intPart, decPart) => {
+      const num = parseFloat(`${intPart}.${decPart}`);
+      if (Number.isNaN(num)) return match;
+      const n = Math.round(num);
+      if (n < 0) return `(-${Math.abs(n)})`;
+      return `(+${n})`;
+    }
+  );
+}
+
 // --- Factura compacta (Epson TM-T20) ---
 // node-escpos: size(1,1) manda GS ! 0x11 (= doble ancho/alto en Epson), NO tamaño normal.
 // Tamaño normal = size(0, 0). Font A + interlineado moderado = un poco más grande que Font B.
@@ -115,6 +196,19 @@ class TicketGenerator {
   static generateKitchenTicket(orderData) {
     const device = new VirtualDevice();
     const printer = new escpos.Printer(device);
+    // Cuerpo: size(1,0) = doble ancho, alto normal → mucha menos altura que (1,1), ~20 cols en 80 mm
+    const BODY_W = 1;
+    const BODY_H = 0;
+    const WRAP_ITEM = 24;
+    const WRAP_MODIF = 24;
+    const WRAP_NOTES = 24;
+    const MOD_LABEL = '   Modif:\n';
+    const MOD_BULLET = '   - ';
+    const MOD_CONT = '     ';
+    /** true = mismo modo que BODY (1,0), ~24 caracteres = ancho útil 80 mm */
+    const sepBody = (ch) => kitchenSepFull(ch, true);
+    /** Interlineado algo más apretado en el cuerpo (menos papel); se restaura antes del corte */
+    const LINE_SPACE_TIGHT = 22;
 
     device.open(() => {
       // Seleccionar tabla de caracteres CP850 (ESC t 1)
@@ -122,31 +216,30 @@ class TicketGenerator {
       device.write(esc, () => {});
       
       // ========================================
-      // ENCABEZADO: Nombre del local centrado
+      // ENCABEZADO: Nombre del local centrado (compacto)
       // ========================================
       const lomiteriaName = orderData.lomiteriaName || 'COCINA';
       printer
         .encode('CP850')
+        .font('a')
         .align('ct')
         .size(2, 2)
         .style('B')
         .text(toCP850(`${lomiteriaName}\n`))
         .style('NORMAL')
-        .size(1, 1)
-        .text(toCP850('------------------------\n'))
-        .feed(1);
+        .size(0, 0)
+        .text(toCP850(kitchenSepFull('=', false)));
 
       // ========================================
-      // NÚMERO DE ORDEN MUY GRANDE
+      // NÚMERO DE ORDEN (2,2 en lugar de 3,3 = menos altura, sigue muy visible)
       // ========================================
       printer
         .align('ct')
-        .size(3, 3)
+        .size(2, 2)
         .style('B')
         .text(toCP850(`#${orderData.orderId || orderData.numeroPedido || 'N/A'}\n`))
         .style('NORMAL')
-        .size(1, 1)
-        .feed(1);
+        .size(0, 0);
 
       // ========================================
       // TIPO DE PEDIDO (DESTACADO)
@@ -171,13 +264,14 @@ class TicketGenerator {
         .style('B')
         .text(toCP850(`[ ${tipoPedido} ]\n`))
         .style('NORMAL')
-        .size(1, 1)
-        .text(toCP850('------------------------\n'))
-        .align('lt')
-        .feed(1);
+        .font('a')
+        .lineSpace(LINE_SPACE_TIGHT)
+        .size(BODY_W, BODY_H)
+        .text(toCP850(sepBody('-')))
+        .align('lt');
 
       // ========================================
-      // INFORMACIÓN ADICIONAL (Hora, Mesa, Cliente)
+      // INFORMACIÓN ADICIONAL (Hora, Mesa, Cliente) — mismo tamaño grande
       // ========================================
       
       // Formatear hora a HH:MM simple
@@ -193,29 +287,33 @@ class TicketGenerator {
       };
 
       const hora = formatearHora(orderData.createdAt);
-      printer.text(toCP850(`Hora: ${hora}\n`));
+      // Una sola línea por dato (sin alternar B/N) + columna fija tras la etiqueta para alinear
+      const INFO_LAB = 10;
+      const infoRow = (label, value) => `${String(label).padEnd(INFO_LAB)}${String(value)}\n`;
 
-      // Mesa o cliente si existe
+      printer
+        .font('a')
+        .size(BODY_W, BODY_H)
+        .style('B')
+        .text(toCP850(infoRow('Hora:', hora)));
+
       if (orderData.tableNumber || orderData.mesa) {
-        printer
-          .style('B')
-          .text(toCP850(`Mesa: ${orderData.tableNumber || orderData.mesa}\n`))
-          .style('NORMAL');
+        printer.text(toCP850(infoRow('Mesa:', orderData.tableNumber || orderData.mesa)));
       }
 
       if (orderData.customerName || orderData.cliente?.nombre) {
         const cliente = orderData.customerName || orderData.cliente?.nombre;
-        printer.text(toCP850(`Cliente: ${cliente}\n`));
+        printer.text(toCP850(infoRow('Cliente:', cliente)));
       }
 
       printer
-        .text(toCP850('------------------------\n'))
-        .feed(1);
+        .style('NORMAL')
+        .align('ct')
+        .text(toCP850(sepBody('-')))
+        .align('lt');
 
       // ========================================
-      // ITEMS - FORMATO TABLA PROFESIONAL
-      // Cantidad a la izquierda, Producto a la derecha
-      // Todo con mismo tamaño de letra y negrita oscura
+      // ITEMS — doble tamaño; saltos de línea por palabra
       // ========================================
       
       const items = orderData.items || [];
@@ -223,45 +321,64 @@ class TicketGenerator {
       items.forEach((item) => {
         const cantidad = (item.cantidad || item.quantity || 1);
         const nombre = item.nombre || item.name || 'Item';
-        
-        // NO truncar - dejar que el texto fluya naturalmente a la siguiente línea
-        // Formato: "2x Producto" - todo en negrita oscura
-        printer
-          .size(1, 1)  // Tamaño normal uniforme
-          .style('B')  // TODO en negrita (cantidad y producto)
-          .text(toCP850(`${cantidad}x ${nombre}\n`))
-          .style('NORMAL');  // Volver a normal después
-        
-        // Modificaciones por ítem: una línea por modificación (evita que se corten palabras)
+
+        printer.font('a').size(BODY_W, BODY_H).style('B');
+        const itemLines = wrapQuantityNameLine(cantidad, nombre, WRAP_ITEM);
+        itemLines.forEach((ln) => {
+          printer.text(toCP850(`${ln}\n`));
+        });
+        printer.style('NORMAL');
+
+        // Modificaciones: mismo tamaño grande (font A), cortes solo entre palabras
         const modificacionesRaw = item.modificaciones || item.personalizaciones || item.notasItem || item.notes;
         const modifList = splitModificaciones(modificacionesRaw);
         if (modifList.length > 0) {
-          printer.text(toCP850('   Modif:\n'));
+          printer.font('a').size(BODY_W, BODY_H).text(toCP850(MOD_LABEL));
+          const innerW = WRAP_MODIF - MOD_BULLET.length;
           modifList.forEach((mod) => {
-            printer.text(toCP850(`   - ${mod}\n`));
+            const wrapped = wrapWords(formatModifExtraAmounts(mod), innerW);
+            wrapped.forEach((part, idx) => {
+              const prefix = idx === 0 ? MOD_BULLET : MOD_CONT;
+              printer.text(toCP850(`${prefix}${part}\n`));
+            });
           });
         }
       });
 
       printer
-        .text(toCP850('========================\n'))
-        .feed(1);
+        .font('a')
+        .align('ct')
+        .size(BODY_W, BODY_H)
+        .text(toCP850(sepBody('=')))
+        .align('lt');
 
       // ========================================
       // NOTAS GENERALES DEL PEDIDO
       // ========================================
       if (orderData.orderNotes || orderData.notas) {
+        const notasRaw = String(orderData.orderNotes || orderData.notas || '');
         printer
+          .font('a')
+          .size(BODY_W, BODY_H)
           .style('B')
-          .text(toCP850('NOTAS:\n'))
-          .style('NORMAL')
-          .text(toCP850(`${orderData.orderNotes || orderData.notas}\n`))
-          .feed(1);
+          .text(toCP850('NOTAS\n'))
+          .style('NORMAL');
+        wrapWords(notasRaw, WRAP_NOTES).forEach((ln) => {
+          printer.text(toCP850(`${ln}\n`));
+        });
       }
 
-      // Cortar papel (mínimo espacio)
+      // Pie: marca más visible que el texto normal; interlineado estándar antes del corte
       printer
-        .feed(2)
+        .align('ct')
+        .font('a')
+        .lineSpace()
+        .size(1, 1)
+        .style('B')
+        .text(toCP850('KaruBox.com.py\n'))
+        .style('NORMAL')
+        .align('lt')
+        .feed(1)
         .cut()
         .close();
     });
@@ -394,7 +511,7 @@ class TicketGenerator {
 
   /**
    * Genera comandos ESC/POS para una factura paraguaya (80mm) usando vista_factura_impresion.
-   * @param {Object} factura - Fila de vista_factura_impresion
+   * @param {Object} factura - Fila de vista_factura_impresion (puede incluir `numero_pedido` para referencia interna)
    */
   static generateParaguayInvoice(factura) {
     const device = new VirtualDevice();
@@ -428,52 +545,89 @@ class TicketGenerator {
     const totalAPagar = Number(factura.total_a_pagar || 0);
     const totalIva = totalIva10 + totalIva5;
     const totalLetras = factura.total_letras || '';
+    const PY_COLS = 48;
+    const numeroPedido =
+      factura.numero_pedido != null && String(factura.numero_pedido).trim() !== ''
+        ? String(factura.numero_pedido).trim()
+        : null;
 
     device.open(() => {
       const esc = Buffer.from([0x1B, 0x74, 0x01]); // CP850
       device.write(esc, () => {});
+
+      const emitSep = (ch) => {
+        printer.align('ct').text(toCP850(kitchenSepFull(ch, false))).align('lt');
+      };
 
       printer.encode('CP850');
       applyInvoiceCompactLayout(printer);
 
       printer
         .align('ct')
+        .font('a')
+        .size(1, 1)
         .style('B')
         .text(toCP850(`${factura.emisor_razon_social || 'LOMITERIA'}\n`))
-        .style('NORMAL');
+        .style('NORMAL')
+        .size(0, 0);
 
       if (factura.emisor_direccion) {
-        printer.text(toCP850(`${factura.emisor_direccion}\n`));
+        wrapWords(String(factura.emisor_direccion), PY_COLS).forEach((ln) => {
+          printer.text(toCP850(`${ln}\n`));
+        });
       }
       if (factura.emisor_telefono) {
-        printer.text(toCP850(`Tel: ${factura.emisor_telefono}\n`));
+        wrapWords(`Tel: ${factura.emisor_telefono}`, PY_COLS).forEach((ln) => {
+          printer.text(toCP850(`${ln}\n`));
+        });
       }
       if (factura.emisor_ruc) {
-        printer.text(toCP850(`RUC: ${factura.emisor_ruc}\n`));
+        wrapWords(`RUC: ${factura.emisor_ruc}`, PY_COLS).forEach((ln) => {
+          printer.text(toCP850(`${ln}\n`));
+        });
       }
 
-      printer
-        .text(toCP850('-------------------------------\n'))
-        .align('lt')
-        .text(toCP850(`TIMBRADO Nº ${timbrado}\n`))
-        .text(toCP850(`Vigencia: ${vigInicio} al ${vigFin}\n`))
-        .text(toCP850(`Factura Nro: ${numeroFactura}\n`))
-        .text(toCP850(`Fecha: ${fechaEmision}\n`))
-        .text(toCP850('Condición de Venta: Contado\n'))
-        .text(toCP850('-------------------------------\n'));
+      emitSep('=');
+      wrapWords(`TIMBRADO Nº ${timbrado}`, PY_COLS).forEach((ln) => {
+        printer.text(toCP850(`${ln}\n`));
+      });
+      wrapWords(`Vigencia: ${vigInicio} al ${vigFin}`, PY_COLS).forEach((ln) => {
+        printer.text(toCP850(`${ln}\n`));
+      });
+      wrapWords(`Factura Nro: ${numeroFactura}`, PY_COLS).forEach((ln) => {
+        printer.text(toCP850(`${ln}\n`));
+      });
+      wrapWords(`Fecha: ${fechaEmision}`, PY_COLS).forEach((ln) => {
+        printer.text(toCP850(`${ln}\n`));
+      });
+      if (numeroPedido) {
+        wrapWords(`Pedido Nº: ${numeroPedido}`, PY_COLS).forEach((ln) => {
+          printer.text(toCP850(`${ln}\n`));
+        });
+      }
+      wrapWords('Condición de Venta: Contado', PY_COLS).forEach((ln) => {
+        printer.text(toCP850(`${ln}\n`));
+      });
+      emitSep('-');
 
       const docIdent = factura.receptor_ruc || factura.receptor_ci || '';
       const nombreCli = factura.receptor_nombre || 'Consumidor final';
       printer
         .style('B')
         .text(toCP850('Cliente:\n'))
-        .style('NORMAL')
-        .text(toCP850(`RUC/CI: ${docIdent}\n`))
-        .text(toCP850(`Nombre: ${nombreCli}\n`));
+        .style('NORMAL');
+      wrapWords(`RUC/CI: ${docIdent}`, PY_COLS).forEach((ln) => {
+        printer.text(toCP850(`${ln}\n`));
+      });
+      wrapWords(`Nombre: ${nombreCli}`, PY_COLS).forEach((ln) => {
+        printer.text(toCP850(`${ln}\n`));
+      });
       if (factura.receptor_direccion) {
-        printer.text(toCP850(`Dirección: ${factura.receptor_direccion}\n`));
+        wrapWords(`Dirección: ${factura.receptor_direccion}`, PY_COLS).forEach((ln) => {
+          printer.text(toCP850(`${ln}\n`));
+        });
       }
-      printer.text(toCP850('-------------------------------\n'));
+      emitSep('-');
 
       // Detalle de items
       printer
@@ -488,13 +642,20 @@ class TicketGenerator {
         const subtotal = Number(it.subtotal || 0);
         const ivaPorc = it.iva_porcentaje != null ? `${it.iva_porcentaje}%` : '';
 
-        printer.text(toCP850(`${cant}  ${nombre}\n`));
+        const itemHead = `${cant}  `;
+        const sangriaPrecio = ' '.repeat(itemHead.length);
+        wrapCantSpaceNombreLine(cant, nombre, PY_COLS).forEach((ln) => {
+          printer.text(toCP850(`${ln}\n`));
+        });
         const precioStr = subtotal.toLocaleString('es-PY');
-        const linea2 = `    ${precio.toLocaleString('es-PY')}   ${precioStr}   (${ivaPorc})`;
-        printer.text(toCP850(`${linea2}\n`));
+        const precioDetalle = `${precio.toLocaleString('es-PY')}   ${precioStr}   (${ivaPorc})`;
+        const innerPrecio = Math.max(8, PY_COLS - itemHead.length);
+        wrapWords(precioDetalle, innerPrecio).forEach((part) => {
+          printer.text(toCP850(`${sangriaPrecio}${part}\n`));
+        });
       });
 
-      printer.text(toCP850('-------------------------------\n'));
+      emitSep('=');
 
       // Totales
       printer
@@ -509,16 +670,22 @@ class TicketGenerator {
         .align('lt');
 
       if (totalLetras) {
-        printer
-          .text(toCP850('\nEn letras:\n'))
-          .text(toCP850(`${totalLetras}\n`));
+        printer.feed(1).text(toCP850('En letras:\n'));
+        wrapWords(String(totalLetras), PY_COLS).forEach((ln) => {
+          printer.text(toCP850(`${ln}\n`));
+        });
       }
 
       printer
-        .feed(1)
+        .feed(2)
         .align('ct')
+        .font('a')
+        .lineSpace()
+        .size(1, 0)
+        .style('B')
         .text(toCP850('KaruBox.com.py\n'))
-        .feed(1);
+        .style('NORMAL')
+        .align('lt');
       resetInvoiceLayout(printer);
       printer.feed(1).cut().close();
     });
