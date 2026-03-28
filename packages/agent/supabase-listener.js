@@ -38,6 +38,8 @@ class SupabaseRealtimeListener {
     this.channel = null;
     this.channelReprint = null;
     this.channelFacturaBump = null;
+    this.reprintRealtimeStatus = 'idle';
+    this.facturaBumpRealtimeStatus = 'idle';
     this.isListening = false;
     /** Emisión inicial automática (Realtime/polling): un pedido_id solo una vez; no aplica a reprint ni factura bump */
     this.initialEmissionPrintedPedidoIds = new Set();
@@ -59,6 +61,8 @@ class SupabaseRealtimeListener {
     this.lastFacturaBumpPollCount = null;
     this.lastFacturaBumpPollError = null;
     this.pollingInterval = null;
+    this.keepAliveInterval = null;
+    this.lastKeepAliveAt = null;
   }
 
   async sleep(ms) {
@@ -88,8 +92,7 @@ class SupabaseRealtimeListener {
   }
 
   async fetchFacturaWithRetry(lomiteriaId, pedidoId, options = {}) {
-    const maxAttempts = Number(options.maxAttempts || process.env.FACTURA_RETRY_ATTEMPTS || 6);
-    const delayMs = Number(options.delayMs || process.env.FACTURA_RETRY_DELAY_MS || 1500);
+    const { maxAttempts, delayMs } = this.getFacturaRetryConfig(options);
 
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const { data: factRows, error: factError } = await this.supabase
@@ -120,8 +123,7 @@ class SupabaseRealtimeListener {
    * reintenta unas veces para cubrir propagación/latencia de la app + vistas.
    */
   async fetchKitchenItemsWithRetry(pedidoId, pedidoAgeMs, options = {}) {
-    const maxAttempts = Number(options.maxAttempts || process.env.KITCHEN_ITEMS_RETRY_ATTEMPTS || 6);
-    const delayMs = Number(options.delayMs || process.env.KITCHEN_ITEMS_RETRY_DELAY_MS || 1500);
+    const { maxAttempts, delayMs } = this.getKitchenRetryConfig(options);
     const freshnessMs = Number(options.freshnessMs || process.env.KITCHEN_ITEMS_FRESHNESS_MS || 30000);
 
     // Solo reintentar si el pedido todavía "es reciente" (primeros segundos tras FACT).
@@ -220,8 +222,12 @@ class SupabaseRealtimeListener {
     return {
       configured: true,
       realtime: this.realtimeStatus,
+      realtimeReprint: this.reprintRealtimeStatus,
+      realtimeFacturaBump: this.facturaBumpRealtimeStatus,
       realtimeError: this.lastRealtimeError || undefined,
       polling: this.pollingInterval ? 'activo' : 'inactivo',
+      keepAlive: this.keepAliveInterval ? 'activo' : 'inactivo',
+      lastKeepAliveAt: this.lastKeepAliveAt || undefined,
       lastPollAt: this.lastPollAt || undefined,
       lastPollCount: this.lastPollCount,
       lastPollError: this.lastPollError || undefined,
@@ -233,6 +239,70 @@ class SupabaseRealtimeListener {
       lastFacturaBumpPollError: this.lastFacturaBumpPollError || undefined,
       receivingOrders: this.isListening || (this.pollingInterval != null)
     };
+  }
+
+  shouldRunFallbackPoll(status) {
+    return status !== 'SUBSCRIBED';
+  }
+
+  getFallbackPollingIntervalMs(env = process.env) {
+    const raw = parseInt(String(env.SUPABASE_FALLBACK_POLLING_MS || '5000'), 10);
+    if (!Number.isFinite(raw) || raw <= 0) return 5000;
+    return Math.max(raw, 1000);
+  }
+
+  isKeepAliveEnabled(env = process.env) {
+    return String(env.SUPABASE_KEEPALIVE_ENABLED || 'true').toLowerCase() !== 'false';
+  }
+
+  getKeepAliveIntervalMs(env = process.env) {
+    const raw = parseInt(String(env.SUPABASE_KEEPALIVE_INTERVAL_MS || '30000'), 10);
+    if (!Number.isFinite(raw) || raw <= 0) return 30000;
+    return Math.max(raw, 5000);
+  }
+
+  getFacturaRetryConfig(options = {}, env = process.env) {
+    const attemptsRaw = Number(options.maxAttempts ?? env.FACTURA_RETRY_ATTEMPTS ?? 3);
+    const delayRaw = Number(options.delayMs ?? env.FACTURA_RETRY_DELAY_MS ?? 500);
+    const maxAttempts = Number.isFinite(attemptsRaw) && attemptsRaw > 0 ? Math.max(1, Math.floor(attemptsRaw)) : 3;
+    const delayMs = Number.isFinite(delayRaw) && delayRaw >= 0 ? Math.max(0, Math.floor(delayRaw)) : 500;
+    return { maxAttempts, delayMs };
+  }
+
+  getKitchenRetryConfig(options = {}, env = process.env) {
+    const attemptsRaw = Number(options.maxAttempts ?? env.KITCHEN_ITEMS_RETRY_ATTEMPTS ?? 2);
+    const delayRaw = Number(options.delayMs ?? env.KITCHEN_ITEMS_RETRY_DELAY_MS ?? 250);
+    const maxAttempts = Number.isFinite(attemptsRaw) && attemptsRaw > 0 ? Math.max(1, Math.floor(attemptsRaw)) : 2;
+    const delayMs = Number.isFinite(delayRaw) && delayRaw >= 0 ? Math.max(0, Math.floor(delayRaw)) : 250;
+    return { maxAttempts, delayMs };
+  }
+
+  shouldUseAsyncInvoice(options = {}) {
+    const { kitchenOnly = false, invoiceOnly = false } = options;
+    return !kitchenOnly && !invoiceOnly;
+  }
+
+  startKeepAliveLoop() {
+    if (!this.isKeepAliveEnabled()) return;
+    const intervalMs = this.getKeepAliveIntervalMs();
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
+    this.keepAliveInterval = setInterval(async () => {
+      if (!this.channel || this.realtimeStatus !== 'SUBSCRIBED') return;
+      try {
+        await this.channel.send({
+          type: 'broadcast',
+          event: 'keepalive',
+          payload: {}
+        });
+        this.lastKeepAliveAt = new Date().toISOString();
+      } catch (error) {
+        logger.debug(`[Realtime] Keepalive falló: ${error.message}`, { service: 'supabase-listener' });
+      }
+    }, intervalMs);
+    logger.info(`[Realtime] Keepalive activo cada ${intervalMs}ms.`, { service: 'supabase-listener' });
   }
 
   /**
@@ -306,15 +376,29 @@ class SupabaseRealtimeListener {
         logger.info(`[Supabase] Conectado a ${tableUrl} | Tabla: ${tableName}`, { service: 'supabase-listener' });
 
         if (!this.pollingInterval) {
+          const fallbackPollingIntervalMs = this.getFallbackPollingIntervalMs();
           this.pollingInterval = setInterval(() => {
-            this.pollRecentOrders();
-            this.pollRecentReprints();
-            this.pollRecentFacturaBumps();
-          }, 15000);
-          logger.info('[Supabase] Polling cada 15s: pedidos FACT + reprint_solicitud + facturas (bump reimpresión).', { service: 'supabase-listener' });
+            if (this.shouldRunFallbackPoll(this.realtimeStatus)) {
+              this.pollRecentOrders();
+            }
+            if (this.shouldRunFallbackPoll(this.reprintRealtimeStatus)) {
+              this.pollRecentReprints();
+            }
+            if (this.shouldRunFallbackPoll(this.facturaBumpRealtimeStatus)) {
+              this.pollRecentFacturaBumps();
+            }
+          }, fallbackPollingIntervalMs);
+          logger.info(
+            `[Supabase] Fallback polling condicional cada ${fallbackPollingIntervalMs}ms (solo si canal realtime correspondiente no está SUBSCRIBED).`,
+            { service: 'supabase-listener' }
+          );
           setImmediate(() => {
-            this.pollRecentReprints();
-            this.pollRecentFacturaBumps();
+            if (this.shouldRunFallbackPoll(this.reprintRealtimeStatus)) {
+              this.pollRecentReprints();
+            }
+            if (this.shouldRunFallbackPoll(this.facturaBumpRealtimeStatus)) {
+              this.pollRecentFacturaBumps();
+            }
           });
         }
 
@@ -351,6 +435,7 @@ class SupabaseRealtimeListener {
             if (status === 'SUBSCRIBED') {
               this.isListening = true;
               this.lastRealtimeError = null;
+              this.startKeepAliveLoop();
               logger.info('[Realtime] Suscrito a pedidos. Emisión inicial al pasar a FACT (p. ej. EDIT→FACT por UPDATE).', { service: 'supabase-listener' });
               try {
                 const { error } = await this.supabase.from(tableName).select('id').limit(1);
@@ -358,11 +443,11 @@ class SupabaseRealtimeListener {
               } catch (_) {}
               resolve();
             } else if (status === 'CHANNEL_ERROR') {
-              logger.error(`[Realtime] Error: ${errMsg || 'desconocido'}. Se usará solo polling cada 15s.`, { service: 'supabase-listener' });
+              logger.error('[Realtime] Error en canal pedidos; fallback polling activo para pedidos.', { service: 'supabase-listener' });
               if (err) try { logger.error('[Realtime] Detalle: ' + JSON.stringify(err), { service: 'supabase-listener' }); } catch (_) {}
               resolve();
             } else if (status === 'TIMED_OUT') {
-              logger.error('[Realtime] Timeout. Se usará solo polling cada 15s.', { service: 'supabase-listener' });
+              logger.error('[Realtime] Timeout en canal pedidos; fallback polling activo para pedidos.', { service: 'supabase-listener' });
               resolve();
             } else if (status === 'CLOSED' && this.isListening) {
               logger.warn('[Realtime] Canal cerrado.', { service: 'supabase-listener' });
@@ -375,7 +460,7 @@ class SupabaseRealtimeListener {
 
         setTimeout(() => {
           if (!this.isListening) {
-            logger.warn('[Realtime] Sin respuesta en 70s. Solo polling activo.', { service: 'supabase-listener' });
+            logger.warn('[Realtime] Sin respuesta en 70s. Fallback polling activo para pedidos.', { service: 'supabase-listener' });
             if (this.channel) this.supabase.removeChannel(this.channel);
             this.channel = null;
             resolve();
@@ -422,6 +507,7 @@ class SupabaseRealtimeListener {
         handler
       )
       .subscribe((status, err) => {
+        this.reprintRealtimeStatus = status;
         const errMsg = (err && (err.message || err.msg || err.error?.message)) || (typeof err === 'string' ? err : null) || null;
         if (status === 'SUBSCRIBED') {
           logger.info('[Realtime] Suscrito a reprint_solicitud (reimpresión cocina/factura explícita).', { service: 'supabase-listener' });
@@ -572,6 +658,7 @@ class SupabaseRealtimeListener {
         }
       )
       .subscribe((status, err) => {
+        this.facturaBumpRealtimeStatus = status;
         const errMsg = (err && (err.message || err.msg || err.error?.message)) || (typeof err === 'string' ? err : null) || null;
         if (status === 'SUBSCRIBED') {
           logger.info('[Realtime] Suscrito a facturas UPDATE (reimpresión fiscal vía bump).', { service: 'supabase-listener' });
@@ -795,6 +882,81 @@ class SupabaseRealtimeListener {
   }
 
   /**
+   * Imprime factura para un pedido (bloqueante o async según quién lo invoque).
+   */
+  async printInvoiceForOrder(order, context = {}) {
+    const {
+      lomiteriaId,
+      printerId,
+      num,
+      kitchenOnly = false,
+      invoiceOnly = false,
+      reprintSolicitudId = null
+    } = context;
+
+    const lookupStartedAt = Date.now();
+    try {
+      const facturaLookup = await this.fetchFacturaWithRetry(lomiteriaId, order.id, {
+        maxAttempts: invoiceOnly ? 8 : undefined
+      });
+      const lookupMs = Date.now() - lookupStartedAt;
+
+      if (facturaLookup.error) {
+        logger.debug(`[Factura] Pedido #${num}: error consultando vista_factura_impresion: ${facturaLookup.error.message}`, { service: 'supabase-listener' });
+        logger.info(`[Timing] Pedido #${num}: factura_lookup_ms=${lookupMs} attempts=${facturaLookup.attempts || 0} (error)`, { service: 'supabase-listener' });
+        return;
+      }
+
+      if (!facturaLookup.factura) {
+        logger.warn(
+          `[Factura] Pedido #${num}: no hay fila en vista_factura_impresion tras ${facturaLookup.attempts} intento(s)`,
+          { service: 'supabase-listener' }
+        );
+        logger.info(`[Timing] Pedido #${num}: factura_lookup_ms=${lookupMs} attempts=${facturaLookup.attempts || 0} (sin fila)`, { service: 'supabase-listener' });
+        if (invoiceOnly) {
+          logger.warn(`[Reprint factura] Pedido #${num}: sin fila en vista_factura_impresion, nada que imprimir`, { service: 'supabase-listener' });
+        }
+        return;
+      }
+
+      const factura = { ...facturaLookup.factura };
+      if (
+        (factura.numero_pedido == null || String(factura.numero_pedido).trim() === '') &&
+        order.numero_pedido != null &&
+        String(order.numero_pedido).trim() !== ''
+      ) {
+        factura.numero_pedido = order.numero_pedido;
+      }
+      const facturaBuffer = TicketGenerator.generateParaguayInvoice(factura);
+      const isInitialFull = !kitchenOnly && !invoiceOnly && !reprintSolicitudId;
+      const rawCopias = process.env.FACTURA_EMISION_COPIAS;
+      const copiasFactura = isInitialFull
+        ? (rawCopias === undefined || rawCopias === ''
+          ? 2
+          : Math.max(1, parseInt(String(rawCopias), 10) || 2))
+        : 1;
+      logger.info(
+        `[Factura] Pedido #${num}: factura encontrada, imprimiendo ${copiasFactura} copia(s)`,
+        { service: 'supabase-listener' }
+      );
+
+      const printStartedAt = Date.now();
+      for (let c = 0; c < copiasFactura; c++) {
+        await printerManager.print(printerId, facturaBuffer);
+      }
+      const printMs = Date.now() - printStartedAt;
+      logger.info(
+        `[Timing] Pedido #${num}: factura_lookup_ms=${lookupMs} attempts=${facturaLookup.attempts || 0} factura_print_ms=${printMs} copias=${copiasFactura}`,
+        { service: 'supabase-listener' }
+      );
+    } catch (factEx) {
+      const lookupMs = Date.now() - lookupStartedAt;
+      logger.debug(`[Factura] Pedido #${num}: excepción al imprimir factura: ${factEx.message}`, { service: 'supabase-listener' });
+      logger.info(`[Timing] Pedido #${num}: factura_lookup_ms=${lookupMs} (exception)`, { service: 'supabase-listener' });
+    }
+  }
+
+  /**
    * Obtiene la configuración de impresora y imprime el pedido
    * @param {Object} order - Fila pedidos
    * @param {{ kitchenOnly?: boolean, invoiceOnly?: boolean, reprintSolicitudId?: string, skipAgeCheck?: boolean }} [options]
@@ -803,6 +965,7 @@ class SupabaseRealtimeListener {
   async printOrder(order, options = {}) {
     const { kitchenOnly = false, invoiceOnly = false, reprintSolicitudId = null, skipAgeCheck = false } = options;
     const num = order.numero_pedido ?? order.id;
+    const totalStartedAt = Date.now();
     try {
       const lomiteriaId = order.tenant_id || order.lomiteria_id || order.tenantId;
       if (!lomiteriaId) {
@@ -846,58 +1009,28 @@ class SupabaseRealtimeListener {
       logger.info(`${tag}[Imprimiendo] Pedido #${num} → ${printerId}${kitchenOnly ? ' (solo cocina)' : ''}${invoiceOnly ? ' (solo factura)' : ''}`, { service: 'supabase-listener' });
 
       let orderData = null;
+      let kitchenDataMs = 0;
+      let kitchenPrintMs = 0;
 
       if (!invoiceOnly) {
+        const kitchenDataStartedAt = Date.now();
         orderData = await this.convertOrderToTicketFormat(order);
+        kitchenDataMs = Date.now() - kitchenDataStartedAt;
         const ticketBuffer = TicketGenerator.generateKitchenTicket(orderData);
+        const kitchenPrintStartedAt = Date.now();
         await printerManager.print(printerId, ticketBuffer);
+        kitchenPrintMs = Date.now() - kitchenPrintStartedAt;
       }
 
       if (!kitchenOnly) {
-        try {
-          const facturaLookup = await this.fetchFacturaWithRetry(lomiteriaId, order.id, {
-            maxAttempts: invoiceOnly ? 8 : 6
+        const invoiceContext = { lomiteriaId, printerId, num, kitchenOnly, invoiceOnly, reprintSolicitudId };
+        if (this.shouldUseAsyncInvoice(options)) {
+          logger.info(`[Factura] Pedido #${num}: emisión de factura en paralelo (no bloquea cocina).`, { service: 'supabase-listener' });
+          this.printInvoiceForOrder(order, invoiceContext).catch((factEx) => {
+            logger.debug(`[Factura] Pedido #${num}: excepción en paralelo: ${factEx.message}`, { service: 'supabase-listener' });
           });
-
-          if (facturaLookup.error) {
-            const factError = facturaLookup.error;
-            logger.debug(`[Factura] Pedido #${num}: error consultando vista_factura_impresion: ${factError.message}`, { service: 'supabase-listener' });
-          } else if (facturaLookup.factura) {
-            const factura = { ...facturaLookup.factura };
-            if (
-              (factura.numero_pedido == null || String(factura.numero_pedido).trim() === '') &&
-              order.numero_pedido != null &&
-              String(order.numero_pedido).trim() !== ''
-            ) {
-              factura.numero_pedido = order.numero_pedido;
-            }
-            const facturaBuffer = TicketGenerator.generateParaguayInvoice(factura);
-            const isInitialFull =
-              !kitchenOnly && !invoiceOnly && !reprintSolicitudId;
-            const rawCopias = process.env.FACTURA_EMISION_COPIAS;
-            const copiasFactura = isInitialFull
-              ? (rawCopias === undefined || rawCopias === ''
-                ? 2
-                : Math.max(1, parseInt(String(rawCopias), 10) || 2))
-              : 1;
-            logger.info(
-              `[Factura] Pedido #${num}: factura encontrada, imprimiendo ${copiasFactura} copia(s)`,
-              { service: 'supabase-listener' }
-            );
-            for (let c = 0; c < copiasFactura; c++) {
-              await printerManager.print(printerId, facturaBuffer);
-            }
-          } else {
-            logger.warn(
-              `[Factura] Pedido #${num}: no hay fila en vista_factura_impresion tras ${facturaLookup.attempts} intento(s)`,
-              { service: 'supabase-listener' }
-            );
-            if (invoiceOnly) {
-              logger.warn(`[Reprint factura] Pedido #${num}: sin fila en vista_factura_impresion, nada que imprimir`, { service: 'supabase-listener' });
-            }
-          }
-        } catch (factEx) {
-          logger.debug(`[Factura] Pedido #${num}: excepción al imprimir factura: ${factEx.message}`, { service: 'supabase-listener' });
+        } else {
+          await this.printInvoiceForOrder(order, invoiceContext);
         }
       }
 
@@ -926,6 +1059,11 @@ class SupabaseRealtimeListener {
       }
 
       logger.info(`${tag}[Impreso] Pedido #${(orderData && orderData.orderId) || num} en ${printerId}`, { service: 'supabase-listener' });
+      const totalMs = Date.now() - totalStartedAt;
+      logger.info(
+        `[Timing] Pedido #${num}: total_ms=${totalMs} kitchen_data_ms=${kitchenDataMs} kitchen_print_ms=${kitchenPrintMs} invoice_mode=${this.shouldUseAsyncInvoice(options) ? 'async' : 'sync'}`,
+        { service: 'supabase-listener' }
+      );
       return true;
     } catch (error) {
       logger.error(`[NO IMPRIME] Pedido #${num}: ${error.message}`, { service: 'supabase-listener' });
@@ -949,10 +1087,9 @@ class SupabaseRealtimeListener {
 
       // Obtener ítems con modificaciones desde la vista (no solo items_pedido).
       // Si llega "demasiado rápido" sin modificaciones, esperamos y reconsultamos.
-      const kitchenLookup = await this.fetchKitchenItemsWithRetry(order.id, pedidoAgeMs, {
-        // Ajuste rápido por default; se puede sobreescribir via env si lo necesitás.
-        maxAttempts: process.env.KITCHEN_ITEMS_RETRY_ATTEMPTS ? undefined : 6
-      });
+      const kitchenLookupStartedAt = Date.now();
+      const kitchenLookup = await this.fetchKitchenItemsWithRetry(order.id, pedidoAgeMs);
+      const kitchenLookupMs = Date.now() - kitchenLookupStartedAt;
 
       const items = kitchenLookup.items || [];
       const itemsError = kitchenLookup.error;
@@ -962,6 +1099,10 @@ class SupabaseRealtimeListener {
           service: 'supabase-listener' 
         });
       }
+      logger.info(
+        `[Timing] Pedido #${order.numero_pedido ?? order.id}: kitchen_lookup_ms=${kitchenLookupMs} attempts=${kitchenLookup.attempts || 0} rows=${items.length}`,
+        { service: 'supabase-listener' }
+      );
 
       // Obtener nombre de la lomitería desde tenants
       let lomiteriaName = 'Lomitería';
@@ -1039,6 +1180,10 @@ class SupabaseRealtimeListener {
       clearInterval(this.pollingInterval);
       this.pollingInterval = null;
     }
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
     if (this.channel && this.supabase) {
       await this.supabase.removeChannel(this.channel);
       this.channel = null;
@@ -1053,6 +1198,8 @@ class SupabaseRealtimeListener {
     }
     this.isListening = false;
     this.realtimeStatus = 'idle';
+    this.reprintRealtimeStatus = 'idle';
+    this.facturaBumpRealtimeStatus = 'idle';
     logger.info('[Supabase] Listener detenido', { service: 'supabase-listener' });
   }
 }

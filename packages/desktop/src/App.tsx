@@ -62,16 +62,6 @@ function App() {
     });
   }, []);
 
-  // Log para debugging
-  useEffect(() => {
-    console.log('🔍 Estado del agente actualizado:', {
-      running: agentStatus.running,
-      healthStatus: agentStatus.health?.status,
-      printersCount: agentStatus.health?.printersCount,
-      healthExists: !!agentStatus.health
-    });
-  }, [agentStatus]);
-
   useEffect(() => {
     // Verificar que electronAPI esté disponible
     if (!window.electronAPI) {
@@ -86,58 +76,22 @@ function App() {
       if (!mounted || !window.electronAPI) return;
 
       try {
-        console.log('📡 Verificando estado del agente...');
-        const [status, health] = await Promise.all([
-          window.electronAPI.getAgentStatus(),
-          window.electronAPI.getAgentHealth(),
-        ]);
-
-        console.log('📊 Respuestas recibidas:', {
-          status,
-          health: {
-            success: health.success,
-            dataStatus: health.data?.status,
-            printersCount: health.data?.printersCount,
-            error: health.error,
-            fullHealth: health // Mostrar todo el objeto health para debugging
-          }
-        });
+        const health = await window.electronAPI.getAgentHealth();
 
         if (!mounted) return;
 
-        // Determinar si el agente está realmente corriendo
-        // Si health.success es true, el agente está corriendo (aunque status.running sea false)
-        // También verificamos si health.data existe y tiene status: 'ok'
         const isActuallyRunning = health.success || 
-                                 (health.data && health.data.status === 'ok') || 
-                                 status.running;
+                                 (health.data && health.data.status === 'ok');
         
-        console.log('✅ Estado calculado:', {
-          isActuallyRunning,
-          healthSuccess: health.success,
-          healthDataStatus: health.data?.status,
-          statusRunning: status.running
-        });
-        
-        // Solo actualizar si hay cambios reales
         setAgentStatus(prev => {
           const newRunning = isActuallyRunning;
           const newHealth = health.success ? health.data : null;
           
-          // Evitar actualización si no hay cambios
           if (prev.running === newRunning && 
               JSON.stringify(prev.health) === JSON.stringify(newHealth)) {
-            console.log('⏭️ Sin cambios, no actualizando');
             return prev;
           }
-          
-          console.log('🔄 Actualizando estado del agente:', {
-            prevRunning: prev.running,
-            newRunning,
-            prevHealth: prev.health ? { status: prev.health.status } : null,
-            newHealth: newHealth ? { status: newHealth.status, printersCount: newHealth.printersCount } : null,
-          });
-          
+
           return {
             running: newRunning,
             health: newHealth,
@@ -146,8 +100,8 @@ function App() {
       } catch (error) {
         if (!mounted) return;
         setAgentStatus(prev => {
-          if (prev.running === false) return prev; // Ya está en false, no actualizar
-          return { ...prev, running: false };
+          if (prev.running === false && prev.health == null) return prev;
+          return { running: false, health: null };
         });
       }
     };
@@ -155,8 +109,8 @@ function App() {
     // Verificar inmediatamente
     updateStatus();
 
-    // Verificar estado del agente cada 5 segundos
-    intervalId = setInterval(updateStatus, 5000);
+    // Verificar estado del agente cada 8 segundos.
+    intervalId = setInterval(updateStatus, 8000);
 
     return () => {
       mounted = false;

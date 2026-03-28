@@ -59,6 +59,7 @@ const config = require('./config');
 const logger = require('./logger');
 const printerManager = require('./printer/PrinterManager');
 const TicketGenerator = require('./printer/TicketGenerator');
+const { getHttpLogLevel } = require('./http-request-logging');
 // const tunnelManager = require('./tunnel-manager'); // Deshabilitado - usando Supabase Realtime
 
 // Cargar supabase-listener de forma segura (no fallar si no hay variables de entorno)
@@ -204,7 +205,8 @@ app.use(express.urlencoded({ extended: true }));
 
 // Logging: Registra todas las peticiones que llegan
 app.use((req, res, next) => {
-  logger.info(`${req.method} ${req.path}`, { body: req.body });
+  const level = getHttpLogLevel(req.method, req.path);
+  logger.log(level, `${req.method} ${req.path}`, { body: req.body });
   next();
 });
 

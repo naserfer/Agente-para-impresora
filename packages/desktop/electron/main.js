@@ -19,6 +19,23 @@ let isQuitting = false;
 // Se usa para forzar un reset por usuario Windows cuando se cambia el cliente/build.
 let agentInstallIdFromBuild = null;
 
+function getAgentLogFileCandidates() {
+  const appDataPath = process.env.APPDATA || process.env.LOCALAPPDATA || os.homedir();
+  const devAgentLog = join(__dirname, '../../agent/logs/combined.log');
+  const packagedAgentLog = join(process.resourcesPath, 'agent/logs/combined.log');
+  const appDataLog = join(appDataPath, 'Agente de Impresion', 'logs', 'combined.log');
+  const tempLog = join(os.tmpdir(), 'agente-impresion-logs', 'combined.log');
+
+  return [devAgentLog, packagedAgentLog, appDataLog, tempLog];
+}
+
+function readTailLines(filePath, maxLines = 120) {
+  const content = readFileSync(filePath, 'utf8');
+  const lines = content.split(/\r?\n/).filter(Boolean);
+  const n = Number.isFinite(Number(maxLines)) ? Math.max(1, Math.min(500, Number(maxLines))) : 120;
+  return lines.slice(-n);
+}
+
 function normalizePrinterId(value) {
   if (!value || typeof value !== 'string') return '';
   return value
@@ -768,6 +785,35 @@ ipcMain.handle('get-agent-debug-info', async () => {
     resourcesPath: process.resourcesPath,
     __dirname: __dirname
   };
+});
+
+ipcMain.handle('get-agent-log-tail', async (_event, maxLines = 120) => {
+  try {
+    const candidates = getAgentLogFileCandidates();
+    const existing = candidates.find((p) => existsSync(p));
+    if (!existing) {
+      return {
+        success: false,
+        data: [],
+        source: null,
+        error: 'No se encontró archivo de logs del agente'
+      };
+    }
+
+    const lines = readTailLines(existing, maxLines);
+    return {
+      success: true,
+      data: lines,
+      source: existing
+    };
+  } catch (error) {
+    return {
+      success: false,
+      data: [],
+      source: null,
+      error: error.message
+    };
+  }
 });
 
 // Función auxiliar para verificar el health del agente

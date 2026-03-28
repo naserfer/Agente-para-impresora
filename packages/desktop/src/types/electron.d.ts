@@ -3,6 +3,7 @@ export interface ElectronAPI {
   startAgent: () => Promise<{ success: boolean; message?: string }>;
   stopAgent: () => Promise<{ success: boolean; message?: string }>;
   getAgentHealth: () => Promise<{ success: boolean; data?: any; error?: string }>;
+  getAgentLogTail: (maxLines?: number) => Promise<{ success: boolean; data?: string[]; source?: string | null; error?: string }>;
   getPrintHistory: () => Promise<{ success: boolean; data?: any[]; count?: number; error?: string }>;
   getPrintersList: () => Promise<{ success: boolean; data?: any[]; count?: number; error?: string }>;
   configurePrinter: (config: {

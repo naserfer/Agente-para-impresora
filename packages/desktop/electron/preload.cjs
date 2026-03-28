@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   stopAgent: () => ipcRenderer.invoke('stop-agent'),
   getAgentHealth: () => ipcRenderer.invoke('get-agent-health'),
   getAgentDebugInfo: () => ipcRenderer.invoke('get-agent-debug-info'),
+  getAgentLogTail: (maxLines) => ipcRenderer.invoke('get-agent-log-tail', maxLines),
   getPrintHistory: () => ipcRenderer.invoke('get-print-history'),
   getPrintersList: () => ipcRenderer.invoke('get-printers-list'),
 

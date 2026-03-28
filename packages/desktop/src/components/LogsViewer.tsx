@@ -1,8 +1,15 @@
 import { useState, useEffect, useRef } from 'react';
 import { Trash2, Download } from 'lucide-react';
 
+function isNoisyHealthLog(line: string): boolean {
+  return line.includes('"message":"GET /health"') ||
+         line.includes('"message":"GET /api/history"') ||
+         line.includes('"message":"GET /api/printers"');
+}
+
 export default function LogsViewer() {
   const [logs, setLogs] = useState<string[]>([]);
+  const [fileLogs, setFileLogs] = useState<string[]>([]);
   const [autoScroll, setAutoScroll] = useState(true);
   const logsEndRef = useRef<HTMLDivElement>(null);
 
@@ -14,24 +21,19 @@ export default function LogsViewer() {
 
     // Escuchar logs del agente
     const handleLog = (data: string) => {
-      console.log('[LogsViewer] Recibido log del agente:', data);
+      if (isNoisyHealthLog(data)) return;
       setLogs((prev) => [...prev, `[AGENT] ${data}`]);
     };
 
     const handleStatus = (data: any) => {
-      console.log('[LogsViewer] Recibido status:', data);
       setLogs((prev) => [...prev, `[STATUS] ${JSON.stringify(data)}`]);
     };
 
     const handleMainLog = (data: any) => {
-      console.log('[LogsViewer] Recibido log del main:', data);
       const prefix = data.level === 'error' ? '❌ [MAIN]' : data.level === 'warn' ? '⚠️ [MAIN]' : 'ℹ️ [MAIN]';
       setLogs((prev) => [...prev, `${prefix} ${data.message}`]);
     };
 
-    console.log('[LogsViewer] Configurando listeners...');
-    
-    // Verificar que electronAPI esté disponible
     if (!window.electronAPI) {
       setLogs(['[ERROR] window.electronAPI no está disponible']);
       return;
@@ -47,7 +49,6 @@ export default function LogsViewer() {
       if (window.electronAPI.onMainProcessLog) {
         window.electronAPI.onMainProcessLog(handleMainLog);
       }
-      console.log('[LogsViewer] Listeners configurados');
       setLogs((prev) => [...prev, '[SYSTEM] Listeners configurados correctamente']);
       
       // Enviar un mensaje de prueba al proceso principal
@@ -61,7 +62,6 @@ export default function LogsViewer() {
         });
       }, 1000);
     } catch (error: any) {
-      console.error('[LogsViewer] Error configurando listeners:', error);
       setLogs((prev) => [...prev, `[ERROR] Error configurando listeners: ${error.message}`]);
     }
 
@@ -77,17 +77,46 @@ export default function LogsViewer() {
   }, []);
 
   useEffect(() => {
+    if (!window.electronAPI?.getAgentLogTail) return;
+
+    let active = true;
+    const poll = async () => {
+      try {
+        const result = await window.electronAPI.getAgentLogTail(140);
+        if (!active) return;
+        if (result?.success && Array.isArray(result.data)) {
+          setFileLogs(
+            result.data
+              .filter((line) => !isNoisyHealthLog(line))
+              .map((line) => `[AGENT] ${line}`)
+          );
+        }
+      } catch {
+        // Silent: el stream IPC sigue siendo la fuente principal.
+      }
+    };
+
+    poll();
+    const timer = setInterval(poll, 3000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+
+  useEffect(() => {
     if (autoScroll && logsEndRef.current) {
       logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
     }
-  }, [logs, autoScroll]);
+  }, [logs, fileLogs, autoScroll]);
 
   const clearLogs = () => {
     setLogs([]);
+    setFileLogs([]);
   };
 
   const downloadLogs = () => {
-    const content = logs.join('\n');
+    const content = [...logs, ...fileLogs].join('\n');
     const blob = new Blob([content], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -129,14 +158,14 @@ export default function LogsViewer() {
       </div>
 
       <div className="bg-gray-900 text-green-400 font-mono text-sm p-4 rounded-lg h-96 overflow-y-auto">
-        {logs.length === 0 ? (
+        {[...logs, ...fileLogs].length === 0 ? (
           <div className="text-gray-500 text-center py-8">
             No hay logs aún. Los logs aparecerán aquí cuando el agente esté corriendo.
             <br />
             <span className="text-xs mt-2 block">Revisa la pestaña "Estado" y haz clic en "Info de Debug" para más información.</span>
           </div>
         ) : (
-          logs.map((log, index) => {
+          [...logs, ...fileLogs].map((log, index) => {
             const isError = log.includes('❌') || log.includes('[MAIN]') && log.includes('ERROR');
             const isWarning = log.includes('⚠️') || log.includes('[MAIN]') && log.includes('WARN');
             return (
