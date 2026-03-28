@@ -517,7 +517,7 @@ class TicketGenerator {
       printer
         .feed(1)
         .align('ct')
-        .text(toCP850('KaruBox\n'))
+        .text(toCP850('KaruBox.com.py\n'))
         .feed(1);
       resetInvoiceLayout(printer);
       printer.feed(1).cut().close();

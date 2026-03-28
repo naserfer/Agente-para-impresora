@@ -6,8 +6,8 @@
  * 
  * ¿Cómo funciona?
  * 1. Se conecta a Supabase Realtime
- * 2. Escucha cambios en la tabla de pedidos
- * 3. Cuando detecta un pedido confirmado, imprime automáticamente
+ * 2. Escucha cambios en la tabla de pedidos (INSERT/UPDATE/DELETE)
+ * 3. Emisión inicial: UPDATE de estado_pedido a FACT (p. ej. EDIT→FACT); INSERT directo en FACT solo por compatibilidad
  * 4. Respeta multitenant filtrando por lomiteria_id
  * 
  * Ventajas:
@@ -39,7 +39,10 @@ class SupabaseRealtimeListener {
     this.channelReprint = null;
     this.channelFacturaBump = null;
     this.isListening = false;
-    this.processedOrders = new Set();
+    /** Emisión inicial automática (Realtime/polling): un pedido_id solo una vez; no aplica a reprint ni factura bump */
+    this.initialEmissionPrintedPedidoIds = new Set();
+    /** Evita carrera Realtime + polling: dos hilos imprimían antes de marcar id → 2× cocina + 2× factura */
+    this.initialEmissionInFlightPedidoIds = new Set();
     this.processedReprintIds = new Set();
     this.processedFacturaBumps = new Set();
     this._reprintPollErrorLogged = false;
@@ -175,6 +178,39 @@ class SupabaseRealtimeListener {
     }
 
     return { items: lastItems, error: null, attempts: maxAttempts };
+  }
+
+  _markInitialEmissionPrinted(pedidoId) {
+    if (pedidoId == null) return;
+    this.initialEmissionPrintedPedidoIds.add(pedidoId);
+    if (this.initialEmissionPrintedPedidoIds.size > 1000) {
+      this.initialEmissionPrintedPedidoIds.delete(this.initialEmissionPrintedPedidoIds.values().next().value);
+    }
+  }
+
+  /**
+   * Emisión inicial: idempotencia + mutex en memoria para no duplicar cocina/factura si Realtime y polling coinciden.
+   */
+  async _runInitialEmissionPrint(order) {
+    const id = order.id;
+    if (this.initialEmissionPrintedPedidoIds.has(id)) {
+      logger.debug(`Pedido ${id}: emisión inicial ya impresa, ignorando`, { service: 'supabase-listener' });
+      return;
+    }
+    if (this.initialEmissionInFlightPedidoIds.has(id)) {
+      logger.debug(
+        `Pedido ${id}: emisión inicial ya en curso (evita duplicado Realtime/polling), ignorando`,
+        { service: 'supabase-listener' }
+      );
+      return;
+    }
+    this.initialEmissionInFlightPedidoIds.add(id);
+    try {
+      const ok = await this.printOrder(order);
+      if (ok) this._markInitialEmissionPrinted(id);
+    } finally {
+      this.initialEmissionInFlightPedidoIds.delete(id);
+    }
   }
 
   getStatus() {
@@ -315,7 +351,7 @@ class SupabaseRealtimeListener {
             if (status === 'SUBSCRIBED') {
               this.isListening = true;
               this.lastRealtimeError = null;
-              logger.info('[Realtime] Suscrito a pedidos. Los nuevos pedidos FACT se imprimen al instante.', { service: 'supabase-listener' });
+              logger.info('[Realtime] Suscrito a pedidos. Emisión inicial al pasar a FACT (p. ej. EDIT→FACT por UPDATE).', { service: 'supabase-listener' });
               try {
                 const { error } = await this.supabase.from(tableName).select('id').limit(1);
                 if (error) logger.warn(`[Realtime] Verificación lectura: ${error.message}`, { service: 'supabase-listener' });
@@ -682,12 +718,9 @@ class SupabaseRealtimeListener {
       this.lastPollCount = rows?.length ?? 0;
       if (!rows?.length) return;
       for (const order of rows) {
-        const key = `${order.id}-${order.updated_at || order.created_at}`;
-        if (this.processedOrders.has(key)) continue;
-        this.processedOrders.add(key);
-        if (this.processedOrders.size > 1000) this.processedOrders.delete(this.processedOrders.values().next().value);
+        if (this.initialEmissionPrintedPedidoIds.has(order.id)) continue;
         logger.info(`[Polling] Pedido FACT #${order.id} → imprimiendo`, { service: 'supabase-listener' });
-        await this.printOrder(order);
+        await this._runInitialEmissionPrint(order);
       }
     } catch (e) {
       this.lastPollError = e.message;
@@ -708,34 +741,46 @@ class SupabaseRealtimeListener {
           const { data: full } = await this.supabase.from('pedidos').select('*').eq('id', orderId).single();
           if (full) order = full;
         }
-        // Verificar que el pedido esté facturado/confirmado
-        // Usamos estado_pedido = 'FACT' que significa facturado/confirmado
-        // También aceptamos estado = 'confirmado' como alternativa
-        const isConfirmed = (order.estado_pedido === 'FACT') || 
-                           (order.estado === 'confirmado') || 
-                           (order.status === 'confirmado');
-        
-        if (!isConfirmed) {
-          logger.debug(`Pedido ${order.id} no está confirmado (estado_pedido: ${order.estado_pedido}, estado: ${order.estado}), ignorando`, { service: 'supabase-listener' });
-          return;
+        if (!order?.id) return;
+
+        // Ka'u / Lomitería: INSERT suele ser EDIT; la emisión inicial es el UPDATE a FACT.
+        if (eventType === 'UPDATE') {
+          if (order.estado_pedido !== 'FACT') {
+            logger.debug(
+              `Pedido ${order.id}: UPDATE sin estado_pedido FACT, ignorando emisión inicial`,
+              { service: 'supabase-listener' }
+            );
+            return;
+          }
+          if (oldRecord && oldRecord.estado_pedido === 'FACT') {
+            logger.debug(
+              `Pedido ${order.id}: UPDATE con pedido ya FACT (sin transición), ignorando emisión inicial`,
+              { service: 'supabase-listener' }
+            );
+            return;
+          }
+        } else if (eventType === 'INSERT') {
+          // Compatibilidad: instalaciones que insertan ya en FACT
+          if (order.estado_pedido !== 'FACT') {
+            logger.debug(
+              `Pedido ${order.id}: INSERT sin FACT (p. ej. EDIT), ignorando emisión inicial automática`,
+              { service: 'supabase-listener' }
+            );
+            return;
+          }
         }
 
-        // Evitar procesar el mismo pedido dos veces
-        const orderKey = `${order.id}-${order.updated_at || order.created_at}`;
-        if (this.processedOrders.has(orderKey)) {
-          logger.debug(`Pedido ${order.id} ya fue procesado, ignorando`, { service: 'supabase-listener' });
-          return;
-        }
-        this.processedOrders.add(orderKey);
-
-        // Limpiar pedidos antiguos del Set (mantener solo los últimos 1000)
-        if (this.processedOrders.size > 1000) {
-          const firstKey = this.processedOrders.values().next().value;
-          this.processedOrders.delete(firstKey);
+        const allowed = process.env.AGENT_TENANT_IDS;
+        if (allowed && allowed.trim()) {
+          const list = allowed.split(',').map((s) => s.trim()).filter(Boolean);
+          const tid = order.tenant_id || order.lomiteria_id;
+          if (list.length && tid && !list.includes(tid)) {
+            logger.debug(`Pedido ${order.id}: ignorado (tenant no en AGENT_TENANT_IDS)`, { service: 'supabase-listener' });
+            return;
+          }
         }
 
-        // Obtener la configuración de impresora para esta lomitería
-        await this.printOrder(order);
+        await this._runInitialEmissionPrint(order);
 
       } else if (eventType === 'DELETE') {
         logger.debug(`Pedido ${oldRecord.id} eliminado`, { service: 'supabase-listener' });
@@ -753,6 +798,7 @@ class SupabaseRealtimeListener {
    * Obtiene la configuración de impresora y imprime el pedido
    * @param {Object} order - Fila pedidos
    * @param {{ kitchenOnly?: boolean, invoiceOnly?: boolean, reprintSolicitudId?: string, skipAgeCheck?: boolean }} [options]
+   * @returns {Promise<boolean>} true si la impresión prevista se completó (para idempotencia de emisión inicial)
    */
   async printOrder(order, options = {}) {
     const { kitchenOnly = false, invoiceOnly = false, reprintSolicitudId = null, skipAgeCheck = false } = options;
@@ -761,7 +807,7 @@ class SupabaseRealtimeListener {
       const lomiteriaId = order.tenant_id || order.lomiteria_id || order.tenantId;
       if (!lomiteriaId) {
         logger.warn(`[NO IMPRIME] Pedido #${num}: sin tenant_id/lomiteria_id`, { service: 'supabase-listener' });
-        return;
+        return false;
       }
 
       const bypassAge = skipAgeCheck === true || !!reprintSolicitudId;
@@ -775,7 +821,7 @@ class SupabaseRealtimeListener {
           `[CicloVida] Pedido #${num} no imprimido: creado hace ~${ageMin} min (ventana máx. ${Number.isFinite(maxMin) && maxMin > 0 ? maxMin : 10} min desde created_at). Solo aplica a impresión automática.`,
           { service: 'supabase-listener' }
         );
-        return;
+        return false;
       }
 
       const { data: printerConfig, error } = await this.supabase
@@ -787,13 +833,13 @@ class SupabaseRealtimeListener {
 
       if (error || !printerConfig) {
         logger.warn(`[NO IMPRIME] Pedido #${num}: no hay printer_config para tenant ${lomiteriaId.slice(0, 8)}... (${error?.message || 'sin fila'})`, { service: 'supabase-listener' });
-        return;
+        return false;
       }
 
       const printerId = printerConfig.printer_id;
       if (!printerManager.printers.has(printerId)) {
         logger.warn(`[NO IMPRIME] Pedido #${num}: impresora "${printerId}" no está configurada en el agente`, { service: 'supabase-listener' });
-        return;
+        return false;
       }
 
       const tag = reprintSolicitudId ? `[Reprint ${reprintSolicitudId.slice(0, 8)}] ` : '';
@@ -818,9 +864,22 @@ class SupabaseRealtimeListener {
             logger.debug(`[Factura] Pedido #${num}: error consultando vista_factura_impresion: ${factError.message}`, { service: 'supabase-listener' });
           } else if (facturaLookup.factura) {
             const factura = facturaLookup.factura;
-            logger.info(`[Factura] Pedido #${num}: factura encontrada, imprimiendo`, { service: 'supabase-listener' });
             const facturaBuffer = TicketGenerator.generateParaguayInvoice(factura);
-            await printerManager.print(printerId, facturaBuffer);
+            const isInitialFull =
+              !kitchenOnly && !invoiceOnly && !reprintSolicitudId;
+            const rawCopias = process.env.FACTURA_EMISION_COPIAS;
+            const copiasFactura = isInitialFull
+              ? (rawCopias === undefined || rawCopias === ''
+                ? 2
+                : Math.max(1, parseInt(String(rawCopias), 10) || 2))
+              : 1;
+            logger.info(
+              `[Factura] Pedido #${num}: factura encontrada, imprimiendo ${copiasFactura} copia(s)`,
+              { service: 'supabase-listener' }
+            );
+            for (let c = 0; c < copiasFactura; c++) {
+              await printerManager.print(printerId, facturaBuffer);
+            }
           } else {
             logger.warn(
               `[Factura] Pedido #${num}: no hay fila en vista_factura_impresion tras ${facturaLookup.attempts} intento(s)`,
@@ -860,8 +919,10 @@ class SupabaseRealtimeListener {
       }
 
       logger.info(`${tag}[Impreso] Pedido #${(orderData && orderData.orderId) || num} en ${printerId}`, { service: 'supabase-listener' });
+      return true;
     } catch (error) {
       logger.error(`[NO IMPRIME] Pedido #${num}: ${error.message}`, { service: 'supabase-listener' });
+      return false;
     }
   }
 
