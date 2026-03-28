@@ -118,6 +118,25 @@ function kitchenSepFull(char, doubleWidthMode) {
   return `${c.repeat(cols)}\n`;
 }
 
+/**
+ * QR en ESC/POS GS ( k modelo 2 (Epson TM y compatibles). `moduleSize` 1–16 (≈5–6 en 80 mm).
+ */
+function buildEpsonQrCodePayload(text, moduleSize = 5) {
+  const data = Buffer.from(String(text || '').trim(), 'utf8');
+  if (data.length < 1 || data.length > 2048) return Buffer.alloc(0);
+  const n = data.length + 3;
+  const pL = n & 0xff;
+  const pH = (n >> 8) & 0xff;
+  const mod = Math.min(16, Math.max(1, Number(moduleSize) || 5));
+  return Buffer.concat([
+    Buffer.from([0x1d, 0x28, 0x6b, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00]),
+    Buffer.from([0x1d, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x43, mod]),
+    Buffer.from([0x1d, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x45, 0x31]),
+    Buffer.concat([Buffer.from([0x1d, 0x28, 0x6b, pL, pH, 0x31, 0x50, 0x30]), data]),
+    Buffer.from([0x1d, 0x28, 0x6b, 0x03, 0x00, 0x31, 0x51, 0x30]),
+  ]);
+}
+
 /** Extrae montos tipo (+1,00) o (+1.00) y los muestra como unidades enteras (+1). */
 function formatModifExtraAmounts(str) {
   return String(str == null ? '' : str).replace(
@@ -303,7 +322,12 @@ class TicketGenerator {
 
       if (orderData.customerName || orderData.cliente?.nombre) {
         const cliente = orderData.customerName || orderData.cliente?.nombre;
-        printer.text(toCP850(infoRow('Cliente:', cliente)));
+        const headCli = 'Cliente:'.padEnd(INFO_LAB);
+        const innerCli = Math.max(6, WRAP_ITEM - INFO_LAB);
+        wrapWords(String(cliente), innerCli).forEach((part, idx) => {
+          const prefix = idx === 0 ? headCli : ' '.repeat(INFO_LAB);
+          printer.text(toCP850(`${prefix}${part}\n`));
+        });
       }
 
       printer
@@ -511,7 +535,7 @@ class TicketGenerator {
 
   /**
    * Genera comandos ESC/POS para una factura paraguaya (80mm) usando vista_factura_impresion.
-   * @param {Object} factura - Fila de vista_factura_impresion (puede incluir `numero_pedido` para referencia interna)
+   * @param {Object} factura - Fila de vista_factura_impresion (`numero_pedido`, `qr_marca_url` / `qr_url` opcionales)
    */
   static generateParaguayInvoice(factura) {
     const device = new VirtualDevice();
@@ -550,6 +574,11 @@ class TicketGenerator {
       factura.numero_pedido != null && String(factura.numero_pedido).trim() !== ''
         ? String(factura.numero_pedido).trim()
         : null;
+    const qrMarcaUrl =
+      (factura.qr_marca_url && String(factura.qr_marca_url).trim()) ||
+      (factura.qr_url && String(factura.qr_url).trim()) ||
+      (process.env.KARUBOX_QR_URL && String(process.env.KARUBOX_QR_URL).trim()) ||
+      'https://KaruBox.com.py';
 
     device.open(() => {
       const esc = Buffer.from([0x1B, 0x74, 0x01]); // CP850
@@ -677,7 +706,7 @@ class TicketGenerator {
       }
 
       printer
-        .feed(2)
+        .feed(4)
         .align('ct')
         .font('a')
         .lineSpace()
@@ -685,7 +714,13 @@ class TicketGenerator {
         .style('B')
         .text(toCP850('KaruBox.com.py\n'))
         .style('NORMAL')
-        .align('lt');
+        .size(0, 0)
+        .align('ct');
+      const qrBuf = buildEpsonQrCodePayload(qrMarcaUrl, 5);
+      if (qrBuf.length > 0) {
+        printer.raw(qrBuf);
+      }
+      printer.feed(1).align('lt');
       resetInvoiceLayout(printer);
       printer.feed(1).cut().close();
     });
