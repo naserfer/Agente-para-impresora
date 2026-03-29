@@ -56,6 +56,239 @@ if (process.env.ELECTRON_RUN_AS_NODE) {
   PRINTERS_CONFIG_FILE = path.join(__dirname, '../../printers-config.json');
 }
 
+const WINDOWS_SHARE_CACHE_TTL_MS = 5 * 60 * 1000;
+const windowsShareInfoCache = new Map();
+
+function isWindowsSpoolFastPathEnabled(env = process.env) {
+  return String(env.WINDOWS_SPOOL_FAST_PATH || 'false').toLowerCase() === 'true';
+}
+
+function getWindowsSpoolFastPathTimeoutMs(env = process.env) {
+  const raw = parseInt(String(env.WINDOWS_SPOOL_FAST_PATH_TIMEOUT_MS || '1200'), 10);
+  if (!Number.isFinite(raw) || raw <= 0) return 1200;
+  return Math.max(raw, 200);
+}
+
+function cleanupFiles(paths = []) {
+  for (const p of paths) {
+    if (!p) continue;
+    try {
+      fs.unlinkSync(p);
+    } catch (_) {}
+  }
+}
+
+function getWindowsPrinterShareInfo(printerName) {
+  const key = String(printerName || '').trim();
+  if (!key) {
+    return Promise.resolve({ shared: false, shareName: null });
+  }
+
+  const now = Date.now();
+  const cached = windowsShareInfoCache.get(key);
+  if (cached && cached.expiresAt > now) {
+    return Promise.resolve({ shared: cached.shared, shareName: cached.shareName });
+  }
+
+  const escapedName = key.replace(/'/g, "''");
+  const command = `powershell -NoProfile -Command "$p = Get-Printer -Name '${escapedName}' -ErrorAction SilentlyContinue; if ($null -eq $p) { Write-Output 'MISSING' } elseif ($p.Shared -and $p.ShareName) { Write-Output ('SHARED|' + $p.ShareName) } else { Write-Output 'NOT_SHARED' }"`;
+
+  return new Promise((resolve) => {
+    exec(command, { windowsHide: true, timeout: 1500, maxBuffer: 256 * 1024 }, (error, stdout) => {
+      let result = { shared: false, shareName: null };
+      if (!error) {
+        const out = String(stdout || '').trim();
+        if (out.startsWith('SHARED|')) {
+          result = { shared: true, shareName: out.slice('SHARED|'.length).trim() || null };
+        }
+      }
+      windowsShareInfoCache.set(key, {
+        ...result,
+        expiresAt: now + WINDOWS_SHARE_CACHE_TTL_MS
+      });
+      resolve(result);
+    });
+  });
+}
+
+function tryWindowsFastPathCopy(printerName, data, options = {}) {
+  const printData = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+  const host = process.env.COMPUTERNAME || 'localhost';
+  const shareName = String(options.shareName || printerName || '').trim();
+  const printerPath = `\\\\${host}\\${shareName}`;
+  const tempFile = path.join(os.tmpdir(), `ticket-fast-${Date.now()}.raw`);
+  fs.writeFileSync(tempFile, printData);
+  const startedAt = Date.now();
+  const timeoutMs = getWindowsSpoolFastPathTimeoutMs();
+  const command = `cmd /c copy /b "${tempFile}" "${printerPath}" >nul`;
+
+  return new Promise((resolve, reject) => {
+    exec(command, { windowsHide: true, timeout: timeoutMs, maxBuffer: 256 * 1024 }, (error, stdout, stderr) => {
+      cleanupFiles([tempFile]);
+      if (error) {
+        const reason = error.killed
+          ? `fast-path timeout (${timeoutMs}ms)`
+          : (stderr || stdout || error.message || 'fast-path failed');
+        return reject(new Error(String(reason).trim()));
+      }
+
+      resolve({
+        spoolMode: 'fast',
+        fallbackUsed: false,
+        printerPath,
+        elapsedMs: Date.now() - startedAt
+      });
+    });
+  });
+}
+
+function printWindowsLegacy(printerName, data) {
+  const printData = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+  const tempFile = path.join(os.tmpdir(), `ticket-${Date.now()}.raw`);
+  fs.writeFileSync(tempFile, printData);
+
+  return new Promise((resolve, reject) => {
+    // Usar PowerShell con el API de Windows para impresión RAW (método correcto con Unicode)
+    const psScript = `
+      $printerName = '${printerName}'
+      $file = '${tempFile}'
+      
+      # Código C# para el API de Windows (usando funciones Unicode)
+      $csharpCode = @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+
+public class RawPrinterHelper {
+    [DllImport("winspool.drv", EntryPoint = "OpenPrinterW", CharSet = CharSet.Unicode, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool OpenPrinter([MarshalAs(UnmanagedType.LPWStr)] string szPrinter, out IntPtr hPrinter, IntPtr pd);
+    
+    [DllImport("winspool.drv", EntryPoint = "ClosePrinter", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool ClosePrinter(IntPtr hPrinter);
+    
+    [DllImport("winspool.drv", EntryPoint = "StartDocPrinterW", CharSet = CharSet.Unicode, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOW di);
+    
+    [DllImport("winspool.drv", EntryPoint = "EndDocPrinter", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndDocPrinter(IntPtr hPrinter);
+    
+    [DllImport("winspool.drv", EntryPoint = "StartPagePrinter", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool StartPagePrinter(IntPtr hPrinter);
+    
+    [DllImport("winspool.drv", EntryPoint = "EndPagePrinter", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool EndPagePrinter(IntPtr hPrinter);
+    
+    [DllImport("winspool.drv", EntryPoint = "WritePrinter", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
+    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
+    
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    public class DOCINFOW {
+        [MarshalAs(UnmanagedType.LPWStr)] public string pDocName;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pDataType;
+    }
+}
+"@
+      
+      Add-Type -TypeDefinition $csharpCode
+      
+      # Verificar que la impresora existe
+      $printer = Get-Printer -Name $printerName -ErrorAction SilentlyContinue
+      if (-not $printer) {
+        Write-Output "ERROR: Impresora no encontrada: $printerName"
+        exit 1
+      }
+      
+      # Intentar compartir la impresora si no está compartida (para mejorar compatibilidad)
+      if (-not $printer.Shared) {
+        try {
+          $shareName = $printerName -replace '[^a-zA-Z0-9_]', '_'
+          Set-Printer -Name $printerName -Shared $true -ShareName $shareName -ErrorAction SilentlyContinue
+          Start-Sleep -Milliseconds 500
+          $printer = Get-Printer -Name $printerName -ErrorAction SilentlyContinue
+        } catch {
+          # Ignorar error al compartir, continuar con el intento de impresión
+        }
+      }
+      
+      # Leer los bytes del archivo
+      $bytes = [System.IO.File]::ReadAllBytes($file)
+      $length = $bytes.Length
+      
+      # Abrir la impresora
+      $hPrinter = [IntPtr]::Zero
+      $opened = [RawPrinterHelper]::OpenPrinter($printer.Name, [ref]$hPrinter, [IntPtr]::Zero)
+      
+      if (-not $opened) {
+        $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+        # Si falla, intentar con el método alternativo
+        Write-Output "ERROR: No se pudo abrir la impresora (Error: $errorCode). Intentando método alternativo..."
+        exit 2
+      }
+      
+      try {
+        # Iniciar documento
+        $di = New-Object RawPrinterHelper+DOCINFOW
+        $di.pDocName = "Ticket"
+        $di.pDataType = "RAW"
+        
+        $started = [RawPrinterHelper]::StartDocPrinter($hPrinter, 1, $di)
+        if (-not $started) {
+          Write-Output "ERROR: No se pudo iniciar el documento"
+          exit 1
+        }
+        
+        try {
+          # Iniciar página
+          [RawPrinterHelper]::StartPagePrinter($hPrinter) | Out-Null
+          
+          # Escribir datos
+          $pBytes = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($length)
+          [System.Runtime.InteropServices.Marshal]::Copy($bytes, 0, $pBytes, $length)
+          
+          $written = 0
+          $success = [RawPrinterHelper]::WritePrinter($hPrinter, $pBytes, $length, [ref]$written)
+          
+          [System.Runtime.InteropServices.Marshal]::FreeHGlobal($pBytes)
+          
+          if (-not $success) {
+            Write-Output "ERROR: No se pudo escribir en la impresora"
+            exit 1
+          }
+          
+          # Finalizar página y documento
+          [RawPrinterHelper]::EndPagePrinter($hPrinter) | Out-Null
+          [RawPrinterHelper]::EndDocPrinter($hPrinter) | Out-Null
+          
+          Write-Output "SUCCESS"
+        } catch {
+          [RawPrinterHelper]::EndDocPrinter($hPrinter) | Out-Null
+          Write-Output "ERROR: $($_.Exception.Message)"
+          exit 1
+        }
+      } finally {
+        [RawPrinterHelper]::ClosePrinter($hPrinter) | Out-Null
+      }
+    `;
+
+    const psFile = path.join(os.tmpdir(), `print-${Date.now()}.ps1`);
+    fs.writeFileSync(psFile, psScript, 'utf8');
+
+    exec(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
+      setTimeout(() => cleanupFiles([tempFile, psFile]), 3000);
+
+      if (error || stdout.includes('ERROR')) {
+        const errorMsg = stdout.includes('ERROR') ? stdout : (error?.message || stderr || 'Error desconocido');
+        logger.warn('Error con API de Windows, intentando método alternativo:', errorMsg);
+        return tryAlternativePrintMethod(printerName, printData, resolve, reject);
+      }
+
+      logger.info(`Impresión enviada a ${printerName}`);
+      resolve();
+    });
+  });
+}
+
 // Función auxiliar para método alternativo de impresión en Windows
 // Usa el método de compartir impresora y copy /b (método más confiable para ESC/POS)
 function tryAlternativePrintMethod(printerName, data, resolve, reject) {
@@ -541,156 +774,66 @@ class PrinterManager {
         try {
           const printerName = device.name;
           const printData = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
-          
-          // Escribir a archivo temporal
-          const tempFile = path.join(os.tmpdir(), `ticket-${Date.now()}.raw`);
-          fs.writeFileSync(tempFile, printData);
-          
-          // Usar PowerShell con el API de Windows para impresión RAW (método correcto con Unicode)
-          const psScript = `
-            $printerName = '${printerName}'
-            $file = '${tempFile}'
-            
-            # Código C# para el API de Windows (usando funciones Unicode)
-            $csharpCode = @"
-using System;
-using System.Runtime.InteropServices;
-using System.Text;
 
-public class RawPrinterHelper {
-    [DllImport("winspool.drv", EntryPoint = "OpenPrinterW", CharSet = CharSet.Unicode, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-    public static extern bool OpenPrinter([MarshalAs(UnmanagedType.LPWStr)] string szPrinter, out IntPtr hPrinter, IntPtr pd);
-    
-    [DllImport("winspool.drv", EntryPoint = "ClosePrinter", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-    public static extern bool ClosePrinter(IntPtr hPrinter);
-    
-    [DllImport("winspool.drv", EntryPoint = "StartDocPrinterW", CharSet = CharSet.Unicode, ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-    public static extern bool StartDocPrinter(IntPtr hPrinter, int level, [In, MarshalAs(UnmanagedType.LPStruct)] DOCINFOW di);
-    
-    [DllImport("winspool.drv", EntryPoint = "EndDocPrinter", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-    public static extern bool EndDocPrinter(IntPtr hPrinter);
-    
-    [DllImport("winspool.drv", EntryPoint = "StartPagePrinter", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-    public static extern bool StartPagePrinter(IntPtr hPrinter);
-    
-    [DllImport("winspool.drv", EntryPoint = "EndPagePrinter", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-    public static extern bool EndPagePrinter(IntPtr hPrinter);
-    
-    [DllImport("winspool.drv", EntryPoint = "WritePrinter", ExactSpelling = true, CallingConvention = CallingConvention.StdCall)]
-    public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
-    
-    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-    public class DOCINFOW {
-        [MarshalAs(UnmanagedType.LPWStr)] public string pDocName;
-        [MarshalAs(UnmanagedType.LPWStr)] public string pOutputFile;
-        [MarshalAs(UnmanagedType.LPWStr)] public string pDataType;
-    }
-}
-"@
-            
-            Add-Type -TypeDefinition $csharpCode
-            
-            # Verificar que la impresora existe
-            $printer = Get-Printer -Name $printerName -ErrorAction SilentlyContinue
-            if (-not $printer) {
-              Write-Output "ERROR: Impresora no encontrada: $printerName"
-              exit 1
-            }
-            
-            # Intentar compartir la impresora si no está compartida (para mejorar compatibilidad)
-            if (-not $printer.Shared) {
-              try {
-                $shareName = $printerName -replace '[^a-zA-Z0-9_]', '_'
-                Set-Printer -Name $printerName -Shared $true -ShareName $shareName -ErrorAction SilentlyContinue
-                Start-Sleep -Milliseconds 500
-                $printer = Get-Printer -Name $printerName -ErrorAction SilentlyContinue
-              } catch {
-                # Ignorar error al compartir, continuar con el intento de impresión
-              }
-            }
-            
-            # Leer los bytes del archivo
-            $bytes = [System.IO.File]::ReadAllBytes($file)
-            $length = $bytes.Length
-            
-            # Abrir la impresora
-            $hPrinter = [IntPtr]::Zero
-            $opened = [RawPrinterHelper]::OpenPrinter($printer.Name, [ref]$hPrinter, [IntPtr]::Zero)
-            
-            if (-not $opened) {
-              $errorCode = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
-              # Si falla, intentar con el método alternativo
-              Write-Output "ERROR: No se pudo abrir la impresora (Error: $errorCode). Intentando método alternativo..."
-              exit 2
-            }
-            
-            try {
-              # Iniciar documento
-              $di = New-Object RawPrinterHelper+DOCINFOW
-              $di.pDocName = "Ticket"
-              $di.pDataType = "RAW"
-              
-              $started = [RawPrinterHelper]::StartDocPrinter($hPrinter, 1, $di)
-              if (-not $started) {
-                Write-Output "ERROR: No se pudo iniciar el documento"
-                exit 1
-              }
-              
-              try {
-                # Iniciar página
-                [RawPrinterHelper]::StartPagePrinter($hPrinter) | Out-Null
-                
-                # Escribir datos
-                $pBytes = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($length)
-                [System.Runtime.InteropServices.Marshal]::Copy($bytes, 0, $pBytes, $length)
-                
-                $written = 0
-                $success = [RawPrinterHelper]::WritePrinter($hPrinter, $pBytes, $length, [ref]$written)
-                
-                [System.Runtime.InteropServices.Marshal]::FreeHGlobal($pBytes)
-                
-                if (-not $success) {
-                  Write-Output "ERROR: No se pudo escribir en la impresora"
-                  exit 1
-                }
-                
-                # Finalizar página y documento
-                [RawPrinterHelper]::EndPagePrinter($hPrinter) | Out-Null
-                [RawPrinterHelper]::EndDocPrinter($hPrinter) | Out-Null
-                
-                Write-Output "SUCCESS"
-              } catch {
-                [RawPrinterHelper]::EndDocPrinter($hPrinter) | Out-Null
-                Write-Output "ERROR: $($_.Exception.Message)"
-                exit 1
-              }
-            } finally {
-              [RawPrinterHelper]::ClosePrinter($hPrinter) | Out-Null
-            }
-          `;
-          
-          const psFile = path.join(os.tmpdir(), `print-${Date.now()}.ps1`);
-          fs.writeFileSync(psFile, psScript, 'utf8');
-          
-          exec(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, { maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-            // Limpiar archivos temporales
-            setTimeout(() => {
-              try {
-                fs.unlinkSync(tempFile);
-                fs.unlinkSync(psFile);
-              } catch (e) {}
-            }, 3000);
-            
-            if (error || stdout.includes('ERROR')) {
-              const errorMsg = stdout.includes('ERROR') ? stdout : (error?.message || stderr || 'Error desconocido');
-              logger.warn(`Error con API de Windows, intentando método alternativo:`, errorMsg);
-              // Intentar método alternativo
-              return tryAlternativePrintMethod(printerName, printData, resolve, reject);
-            }
-            
-            logger.info(`Impresión enviada a ${printerName}`);
+          const spoolStartedAt = Date.now();
+          const useFastPath = isWindowsSpoolFastPathEnabled();
+          const finishWithMetrics = (spoolMode, fallbackUsed = false, fallbackReason = null, extra = {}) => {
+            logger.info('[SpoolMetrics] Windows spool enviado', {
+              service: 'print-agent',
+              printerId,
+              printerName,
+              spool_mode: spoolMode,
+              fallback_used: fallbackUsed,
+              fallback_reason: fallbackReason || undefined,
+              spool_ms: Date.now() - spoolStartedAt,
+              ...extra
+            });
             resolve();
-          });
+          };
+
+          const runLegacy = (fallbackReason = null) => {
+            printWindowsLegacy(printerName, printData)
+              .then(() => finishWithMetrics('legacy', Boolean(fallbackReason), fallbackReason))
+              .catch((legacyError) => reject(legacyError));
+          };
+
+          if (!useFastPath) {
+            runLegacy(null);
+            return;
+          }
+
+          getWindowsPrinterShareInfo(printerName)
+            .then((shareInfo) => {
+              if (!shareInfo.shared || !shareInfo.shareName) {
+                runLegacy('fast_path_not_shared');
+                return;
+              }
+              return tryWindowsFastPathCopy(printerName, printData, { shareName: shareInfo.shareName })
+                .then((result) => {
+                  finishWithMetrics('fast', false, null, {
+                    fast_path_ms: result.elapsedMs,
+                    printer_path: result.printerPath
+                  });
+                })
+                .catch((fastError) => {
+                  logger.warn('[SpoolFastPath] Falló fast-path, usando legacy', {
+                    service: 'print-agent',
+                    printerId,
+                    printerName,
+                    error: fastError.message
+                  });
+                  runLegacy('fast_path_failed');
+                });
+            })
+            .catch((shareError) => {
+              logger.warn('[SpoolFastPath] No se pudo validar Shared/ShareName, usando legacy', {
+                service: 'print-agent',
+                printerId,
+                printerName,
+                error: shareError.message
+              });
+              runLegacy('fast_path_check_failed');
+            });
         } catch (err) {
           logger.error(`Error durante la impresión en ${printerId}:`, err);
           reject(err);
