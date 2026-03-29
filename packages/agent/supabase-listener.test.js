@@ -29,7 +29,7 @@ test('retry defaults are tuned for low latency', () => {
   assert.equal(facturaDefaults.delayMs, 500);
 
   const kitchenDefaults = listener.getKitchenRetryConfig({}, {});
-  assert.equal(kitchenDefaults.maxAttempts, 2);
+  assert.equal(kitchenDefaults.maxAttempts, 1);
   assert.equal(kitchenDefaults.delayMs, 250);
 });
 

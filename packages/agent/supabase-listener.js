@@ -25,10 +25,12 @@ if (typeof global !== 'undefined' && !global.WebSocket) {
 }
 
 const { createClient } = require('@supabase/supabase-js');
+const { performance } = require('node:perf_hooks');
 const config = require('./config');
 const logger = require('./logger');
 const printerManager = require('./printer/PrinterManager');
 const TicketGenerator = require('./printer/TicketGenerator');
+const { createCorrelationId, logPrintTrace } = require('./print-trace');
 
 class SupabaseRealtimeListener {
   constructor() {
@@ -63,10 +65,24 @@ class SupabaseRealtimeListener {
     this.pollingInterval = null;
     this.keepAliveInterval = null;
     this.lastKeepAliveAt = null;
+    this.realtimeDisconnectedAt = null;
+    this.lastRealtimeDowntimeMs = null;
+    this.pollingAnomalyCount = 0;
+    this.lastPollingAnomalyAt = null;
   }
 
   async sleep(ms) {
     await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async emitTraceEvent({ correlationId, orderId = null, stage, meta = {}, source = 'agent' }) {
+    await logPrintTrace(this.supabase, logger, {
+      correlationId,
+      orderId,
+      stage,
+      source,
+      meta
+    });
   }
 
   /**
@@ -193,7 +209,7 @@ class SupabaseRealtimeListener {
   /**
    * Emisión inicial: idempotencia + mutex en memoria para no duplicar cocina/factura si Realtime y polling coinciden.
    */
-  async _runInitialEmissionPrint(order) {
+  async _runInitialEmissionPrint(order, traceContext = {}) {
     const id = order.id;
     if (this.initialEmissionPrintedPedidoIds.has(id)) {
       logger.debug(`Pedido ${id}: emisión inicial ya impresa, ignorando`, { service: 'supabase-listener' });
@@ -208,7 +224,7 @@ class SupabaseRealtimeListener {
     }
     this.initialEmissionInFlightPedidoIds.add(id);
     try {
-      const ok = await this.printOrder(order);
+      const ok = await this.printOrder(order, { traceContext });
       if (ok) this._markInitialEmissionPrinted(id);
     } finally {
       this.initialEmissionInFlightPedidoIds.delete(id);
@@ -228,6 +244,9 @@ class SupabaseRealtimeListener {
       polling: this.pollingInterval ? 'activo' : 'inactivo',
       keepAlive: this.keepAliveInterval ? 'activo' : 'inactivo',
       lastKeepAliveAt: this.lastKeepAliveAt || undefined,
+      lastRealtimeDowntimeMs: this.lastRealtimeDowntimeMs,
+      pollingAnomalyCount: this.pollingAnomalyCount,
+      lastPollingAnomalyAt: this.lastPollingAnomalyAt || undefined,
       lastPollAt: this.lastPollAt || undefined,
       lastPollCount: this.lastPollCount,
       lastPollError: this.lastPollError || undefined,
@@ -270,9 +289,9 @@ class SupabaseRealtimeListener {
   }
 
   getKitchenRetryConfig(options = {}, env = process.env) {
-    const attemptsRaw = Number(options.maxAttempts ?? env.KITCHEN_ITEMS_RETRY_ATTEMPTS ?? 2);
+    const attemptsRaw = Number(options.maxAttempts ?? env.KITCHEN_ITEMS_RETRY_ATTEMPTS ?? 1);
     const delayRaw = Number(options.delayMs ?? env.KITCHEN_ITEMS_RETRY_DELAY_MS ?? 250);
-    const maxAttempts = Number.isFinite(attemptsRaw) && attemptsRaw > 0 ? Math.max(1, Math.floor(attemptsRaw)) : 2;
+    const maxAttempts = Number.isFinite(attemptsRaw) && attemptsRaw > 0 ? Math.max(1, Math.floor(attemptsRaw)) : 1;
     const delayMs = Number.isFinite(delayRaw) && delayRaw >= 0 ? Math.max(0, Math.floor(delayRaw)) : 250;
     return { maxAttempts, delayMs };
   }
@@ -431,6 +450,24 @@ class SupabaseRealtimeListener {
             this.realtimeStatus = status;
             const errMsg = (err && (err.message || err.msg || err.error?.message || (typeof err.error === 'string' ? err.error : null))) || (typeof err === 'string' ? err : null) || null;
             if (errMsg) this.lastRealtimeError = errMsg;
+            if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+              if (!this.realtimeDisconnectedAt) {
+                this.realtimeDisconnectedAt = Date.now();
+                await this.emitTraceEvent({
+                  correlationId: createCorrelationId(),
+                  stage: 'realtime_disconnected',
+                  meta: { status, error: errMsg || undefined }
+                });
+              }
+            } else if (status === 'SUBSCRIBED' && this.realtimeDisconnectedAt) {
+              this.lastRealtimeDowntimeMs = Date.now() - this.realtimeDisconnectedAt;
+              await this.emitTraceEvent({
+                correlationId: createCorrelationId(),
+                stage: 'realtime_reconnected',
+                meta: { downtime_ms: this.lastRealtimeDowntimeMs }
+              });
+              this.realtimeDisconnectedAt = null;
+            }
 
             if (status === 'SUBSCRIBED') {
               this.isListening = true;
@@ -578,9 +615,31 @@ class SupabaseRealtimeListener {
     }
 
     if (tipo === 'cocina') {
-      await this.printOrder(pedido, { kitchenOnly: true, reprintSolicitudId: row.id });
+      const correlationId = createCorrelationId();
+      await this.emitTraceEvent({
+        correlationId,
+        orderId: pedido.id,
+        stage: 'agent_event_received',
+        meta: { source_trigger: 'reprint_solicitud', reprint_id: row.id, ticket: 'cocina' }
+      });
+      await this.printOrder(pedido, {
+        kitchenOnly: true,
+        reprintSolicitudId: row.id,
+        traceContext: { correlationId, sourceTrigger: 'reprint_solicitud', eventReceivedLogged: true }
+      });
     } else {
-      await this.printOrder(pedido, { invoiceOnly: true, reprintSolicitudId: row.id });
+      const correlationId = createCorrelationId();
+      await this.emitTraceEvent({
+        correlationId,
+        orderId: pedido.id,
+        stage: 'agent_event_received',
+        meta: { source_trigger: 'reprint_solicitud', reprint_id: row.id, ticket: 'factura' }
+      });
+      await this.printOrder(pedido, {
+        invoiceOnly: true,
+        reprintSolicitudId: row.id,
+        traceContext: { correlationId, sourceTrigger: 'reprint_solicitud', eventReceivedLogged: true }
+      });
     }
   }
 
@@ -589,6 +648,16 @@ class SupabaseRealtimeListener {
    */
   async pollRecentReprints() {
     if (!this.supabase || process.env.ENABLE_REPRINT_SOLICITUD === 'false') return;
+    if (this.reprintRealtimeStatus === 'SUBSCRIBED') {
+      this.pollingAnomalyCount += 1;
+      this.lastPollingAnomalyAt = new Date().toISOString();
+      await this.emitTraceEvent({
+        correlationId: createCorrelationId(),
+        stage: 'polling_accidental',
+        meta: { target: 'reprint_solicitud', realtime_status: this.reprintRealtimeStatus }
+      });
+      return;
+    }
     const min = parseInt(process.env.POLLING_REPRINT_MINUTES || process.env.POLLING_FACT_MINUTES || '15', 10) || 15;
     const since = new Date(Date.now() - min * 60 * 1000).toISOString();
     this.lastReprintPollAt = new Date().toISOString();
@@ -736,11 +805,32 @@ class SupabaseRealtimeListener {
       return;
     }
 
-    await this.printOrder(pedido, { invoiceOnly: true, skipAgeCheck: true });
+    const correlationId = createCorrelationId();
+    await this.emitTraceEvent({
+      correlationId,
+      orderId: pedido.id,
+      stage: 'agent_event_received',
+      meta: { source_trigger: 'factura_bump', factura_id: row.id, ticket: 'factura' }
+    });
+    await this.printOrder(pedido, {
+      invoiceOnly: true,
+      skipAgeCheck: true,
+      traceContext: { correlationId, sourceTrigger: 'factura_bump', eventReceivedLogged: true }
+    });
   }
 
   async pollRecentFacturaBumps() {
     if (!this.supabase || process.env.ENABLE_FACTURA_BUMP_LISTENER === 'false') return;
+    if (this.facturaBumpRealtimeStatus === 'SUBSCRIBED') {
+      this.pollingAnomalyCount += 1;
+      this.lastPollingAnomalyAt = new Date().toISOString();
+      await this.emitTraceEvent({
+        correlationId: createCorrelationId(),
+        stage: 'polling_accidental',
+        meta: { target: 'facturas_bump', realtime_status: this.facturaBumpRealtimeStatus }
+      });
+      return;
+    }
     const min = parseInt(process.env.POLLING_FACTURA_BUMP_MINUTES || process.env.POLLING_FACT_MINUTES || '15', 10) || 15;
     const since = new Date(Date.now() - min * 60 * 1000).toISOString();
     this.lastFacturaBumpPollAt = new Date().toISOString();
@@ -784,6 +874,16 @@ class SupabaseRealtimeListener {
 
   async pollRecentOrders() {
     if (!this.supabase) return;
+    if (this.realtimeStatus === 'SUBSCRIBED') {
+      this.pollingAnomalyCount += 1;
+      this.lastPollingAnomalyAt = new Date().toISOString();
+      await this.emitTraceEvent({
+        correlationId: createCorrelationId(),
+        stage: 'polling_accidental',
+        meta: { target: 'pedidos_fact', realtime_status: this.realtimeStatus }
+      });
+      return;
+    }
     const tableName = process.env.SUPABASE_ORDERS_TABLE || 'pedidos';
     const min = parseInt(process.env.POLLING_FACT_MINUTES || '10', 10) || 10;
     const since = new Date(Date.now() - min * 60 * 1000).toISOString();
@@ -807,7 +907,14 @@ class SupabaseRealtimeListener {
       for (const order of rows) {
         if (this.initialEmissionPrintedPedidoIds.has(order.id)) continue;
         logger.info(`[Polling] Pedido FACT #${order.id} → imprimiendo`, { service: 'supabase-listener' });
-        await this._runInitialEmissionPrint(order);
+        const correlationId = createCorrelationId();
+        await this.emitTraceEvent({
+          correlationId,
+          orderId: order.id,
+          stage: 'agent_event_received',
+          meta: { source_trigger: 'polling', table: tableName }
+        });
+        await this._runInitialEmissionPrint(order, { correlationId, sourceTrigger: 'polling', eventReceivedLogged: true });
       }
     } catch (e) {
       this.lastPollError = e.message;
@@ -867,7 +974,18 @@ class SupabaseRealtimeListener {
           }
         }
 
-        await this._runInitialEmissionPrint(order);
+        const correlationId = createCorrelationId();
+        await this.emitTraceEvent({
+          correlationId,
+          orderId: order.id,
+          stage: 'agent_event_received',
+          meta: {
+            source_trigger: 'realtime',
+            event_type: eventType,
+            order_status: order.estado_pedido
+          }
+        });
+        await this._runInitialEmissionPrint(order, { correlationId, sourceTrigger: 'realtime', eventReceivedLogged: true });
 
       } else if (eventType === 'DELETE') {
         logger.debug(`Pedido ${oldRecord.id} eliminado`, { service: 'supabase-listener' });
@@ -888,18 +1006,21 @@ class SupabaseRealtimeListener {
     const {
       lomiteriaId,
       printerId,
+      printerName = printerId,
       num,
       kitchenOnly = false,
       invoiceOnly = false,
-      reprintSolicitudId = null
+      reprintSolicitudId = null,
+      traceContext = {}
     } = context;
+    const correlationId = traceContext.correlationId || createCorrelationId();
 
-    const lookupStartedAt = Date.now();
+    const lookupStartedAt = performance.now();
     try {
       const facturaLookup = await this.fetchFacturaWithRetry(lomiteriaId, order.id, {
         maxAttempts: invoiceOnly ? 8 : undefined
       });
-      const lookupMs = Date.now() - lookupStartedAt;
+      const lookupMs = Math.round(performance.now() - lookupStartedAt);
 
       if (facturaLookup.error) {
         logger.debug(`[Factura] Pedido #${num}: error consultando vista_factura_impresion: ${facturaLookup.error.message}`, { service: 'supabase-listener' });
@@ -927,7 +1048,31 @@ class SupabaseRealtimeListener {
       ) {
         factura.numero_pedido = order.numero_pedido;
       }
+      await this.emitTraceEvent({
+        correlationId,
+        orderId: order.id,
+        stage: 'agent_render_start',
+        meta: {
+          ticket: 'factura',
+          printer_id: printerId,
+          printer_name: printerName
+        }
+      });
+      const invoiceRenderStart = performance.now();
       const facturaBuffer = TicketGenerator.generateParaguayInvoice(factura);
+      const invoiceRenderMs = Math.round(performance.now() - invoiceRenderStart);
+      await this.emitTraceEvent({
+        correlationId,
+        orderId: order.id,
+        stage: 'agent_render_done',
+        meta: {
+          ticket: 'factura',
+          printer_id: printerId,
+          printer_name: printerName,
+          payload_size: facturaBuffer.length,
+          render_ms: invoiceRenderMs
+        }
+      });
       const isInitialFull = !kitchenOnly && !invoiceOnly && !reprintSolicitudId;
       const rawCopias = process.env.FACTURA_EMISION_COPIAS;
       const copiasFactura = isInitialFull
@@ -940,17 +1085,45 @@ class SupabaseRealtimeListener {
         { service: 'supabase-listener' }
       );
 
-      const printStartedAt = Date.now();
       for (let c = 0; c < copiasFactura; c++) {
+        const spoolStart = performance.now();
+        await this.emitTraceEvent({
+          correlationId,
+          orderId: order.id,
+          stage: 'spool_submit',
+          meta: {
+            ticket: 'factura',
+            printer_id: printerId,
+            printer_name: printerName,
+            copies: copiasFactura,
+            copy_index: c + 1,
+            payload_size: facturaBuffer.length
+          }
+        });
         await printerManager.print(printerId, facturaBuffer);
+        const spoolMs = Math.round(performance.now() - spoolStart);
+        await this.emitTraceEvent({
+          correlationId,
+          orderId: order.id,
+          stage: 'spool_ack',
+          meta: {
+            ticket: 'factura',
+            printer_id: printerId,
+            printer_name: printerName,
+            copies: copiasFactura,
+            copy_index: c + 1,
+            payload_size: facturaBuffer.length,
+            spool_ms: spoolMs
+          }
+        });
       }
-      const printMs = Date.now() - printStartedAt;
+      const printMs = Math.round(performance.now() - lookupStartedAt) - lookupMs;
       logger.info(
         `[Timing] Pedido #${num}: factura_lookup_ms=${lookupMs} attempts=${facturaLookup.attempts || 0} factura_print_ms=${printMs} copias=${copiasFactura}`,
         { service: 'supabase-listener' }
       );
     } catch (factEx) {
-      const lookupMs = Date.now() - lookupStartedAt;
+      const lookupMs = Math.round(performance.now() - lookupStartedAt);
       logger.debug(`[Factura] Pedido #${num}: excepción al imprimir factura: ${factEx.message}`, { service: 'supabase-listener' });
       logger.info(`[Timing] Pedido #${num}: factura_lookup_ms=${lookupMs} (exception)`, { service: 'supabase-listener' });
     }
@@ -964,10 +1137,23 @@ class SupabaseRealtimeListener {
    */
   async printOrder(order, options = {}) {
     const { kitchenOnly = false, invoiceOnly = false, reprintSolicitudId = null, skipAgeCheck = false } = options;
+    const traceContext = options.traceContext || {};
     const num = order.numero_pedido ?? order.id;
-    const totalStartedAt = Date.now();
+    const totalStartedAt = performance.now();
     try {
       const lomiteriaId = order.tenant_id || order.lomiteria_id || order.tenantId;
+      const correlationId = traceContext.correlationId || createCorrelationId();
+      const sourceTrigger = traceContext.sourceTrigger || (reprintSolicitudId ? 'reprint' : 'direct');
+
+      if (!traceContext.eventReceivedLogged) {
+        await this.emitTraceEvent({
+          correlationId,
+          orderId: order.id,
+          stage: 'agent_event_received',
+          meta: { source_trigger: sourceTrigger, inferred: true }
+        });
+      }
+
       if (!lomiteriaId) {
         logger.warn(`[NO IMPRIME] Pedido #${num}: sin tenant_id/lomiteria_id`, { service: 'supabase-listener' });
         return false;
@@ -1004,26 +1190,59 @@ class SupabaseRealtimeListener {
         logger.warn(`[NO IMPRIME] Pedido #${num}: impresora "${printerId}" no está configurada en el agente`, { service: 'supabase-listener' });
         return false;
       }
+      const printerName = printerManager.printers.get(printerId)?.config?.printerName || printerId;
 
       const tag = reprintSolicitudId ? `[Reprint ${reprintSolicitudId.slice(0, 8)}] ` : '';
       logger.info(`${tag}[Imprimiendo] Pedido #${num} → ${printerId}${kitchenOnly ? ' (solo cocina)' : ''}${invoiceOnly ? ' (solo factura)' : ''}`, { service: 'supabase-listener' });
 
       let orderData = null;
-      let kitchenDataMs = 0;
-      let kitchenPrintMs = 0;
+      let renderMs = 0;
+      let spoolMs = 0;
 
       if (!invoiceOnly) {
-        const kitchenDataStartedAt = Date.now();
+        const renderStart = performance.now();
+        await this.emitTraceEvent({
+          correlationId,
+          orderId: order.id,
+          stage: 'agent_render_start',
+          meta: { ticket: 'cocina', printer_id: printerId, printer_name: printerName, copies: 1 }
+        });
         orderData = await this.convertOrderToTicketFormat(order);
-        kitchenDataMs = Date.now() - kitchenDataStartedAt;
         const ticketBuffer = TicketGenerator.generateKitchenTicket(orderData);
-        const kitchenPrintStartedAt = Date.now();
+        renderMs = Math.round(performance.now() - renderStart);
+        await this.emitTraceEvent({
+          correlationId,
+          orderId: order.id,
+          stage: 'agent_render_done',
+          meta: {
+            ticket: 'cocina',
+            printer_id: printerId,
+            printer_name: printerName,
+            copies: 1,
+            payload_size: ticketBuffer.length,
+            render_ms: renderMs
+          }
+        });
+
+        const spoolStart = performance.now();
+        await this.emitTraceEvent({
+          correlationId,
+          orderId: order.id,
+          stage: 'spool_submit',
+          meta: { ticket: 'cocina', printer_id: printerId, printer_name: printerName, copies: 1, payload_size: ticketBuffer.length }
+        });
         await printerManager.print(printerId, ticketBuffer);
-        kitchenPrintMs = Date.now() - kitchenPrintStartedAt;
+        spoolMs = Math.round(performance.now() - spoolStart);
+        await this.emitTraceEvent({
+          correlationId,
+          orderId: order.id,
+          stage: 'spool_ack',
+          meta: { ticket: 'cocina', printer_id: printerId, printer_name: printerName, copies: 1, payload_size: ticketBuffer.length, spool_ms: spoolMs }
+        });
       }
 
       if (!kitchenOnly) {
-        const invoiceContext = { lomiteriaId, printerId, num, kitchenOnly, invoiceOnly, reprintSolicitudId };
+        const invoiceContext = { lomiteriaId, printerId, printerName, num, kitchenOnly, invoiceOnly, reprintSolicitudId, traceContext: { correlationId, sourceTrigger } };
         if (this.shouldUseAsyncInvoice(options)) {
           logger.info(`[Factura] Pedido #${num}: emisión de factura en paralelo (no bloquea cocina).`, { service: 'supabase-listener' });
           this.printInvoiceForOrder(order, invoiceContext).catch((factEx) => {
@@ -1059,11 +1278,24 @@ class SupabaseRealtimeListener {
       }
 
       logger.info(`${tag}[Impreso] Pedido #${(orderData && orderData.orderId) || num} en ${printerId}`, { service: 'supabase-listener' });
-      const totalMs = Date.now() - totalStartedAt;
+      const totalMs = Math.round(performance.now() - totalStartedAt);
       logger.info(
-        `[Timing] Pedido #${num}: total_ms=${totalMs} kitchen_data_ms=${kitchenDataMs} kitchen_print_ms=${kitchenPrintMs} invoice_mode=${this.shouldUseAsyncInvoice(options) ? 'async' : 'sync'}`,
+        `[Timing] Pedido #${num}: total_ms=${totalMs} render_ms=${renderMs} spool_ms=${spoolMs} invoice_mode=${this.shouldUseAsyncInvoice(options) ? 'async' : 'sync'}`,
         { service: 'supabase-listener' }
       );
+      await this.emitTraceEvent({
+        correlationId,
+        orderId: order.id,
+        stage: 'agent_completed',
+        meta: {
+          printer_id: printerId,
+          printer_name: printerName,
+          total_agent_ms: totalMs,
+          render_ms: renderMs,
+          spool_ms: spoolMs,
+          invoice_mode: this.shouldUseAsyncInvoice(options) ? 'async' : 'sync'
+        }
+      });
       return true;
     } catch (error) {
       logger.error(`[NO IMPRIME] Pedido #${num}: ${error.message}`, { service: 'supabase-listener' });
@@ -1200,6 +1432,8 @@ class SupabaseRealtimeListener {
     this.realtimeStatus = 'idle';
     this.reprintRealtimeStatus = 'idle';
     this.facturaBumpRealtimeStatus = 'idle';
+    this.realtimeDisconnectedAt = null;
+    this.lastRealtimeDowntimeMs = null;
     logger.info('[Supabase] Listener detenido', { service: 'supabase-listener' });
   }
 }
