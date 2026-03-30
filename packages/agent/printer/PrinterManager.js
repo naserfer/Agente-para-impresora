@@ -791,21 +791,27 @@ class PrinterManager {
             resolve();
           };
 
-          const runLegacy = (fallbackReason = null) => {
-            printWindowsLegacy(printerName, printData)
-              .then(() => finishWithMetrics('legacy', Boolean(fallbackReason), fallbackReason))
-              .catch((legacyError) => reject(legacyError));
-          };
-
           if (!useFastPath) {
-            runLegacy(null);
+            reject(new Error(
+              `Fast-path de impresión deshabilitado para ${printerName}. ` +
+              'Este agente está configurado para usar SOLO fast-path. ' +
+              'Configura WINDOWS_SPOOL_FAST_PATH=true para habilitar impresión.'
+            ));
             return;
           }
 
           getWindowsPrinterShareInfo(printerName)
             .then((shareInfo) => {
               if (!shareInfo.shared || !shareInfo.shareName) {
-                runLegacy('fast_path_not_shared');
+                logger.warn('[SpoolFastPath] Impresora no compartida, no hay fallback legacy', {
+                  service: 'print-agent',
+                  printerId,
+                  printerName
+                });
+                reject(new Error(
+                  `Fast-path requiere impresora compartida en Windows: ${printerName}. ` +
+                  'Compartila y asegurá que tenga ShareName para imprimir.'
+                ));
                 return;
               }
               return tryWindowsFastPathCopy(printerName, printData, { shareName: shareInfo.shareName })
@@ -822,17 +828,23 @@ class PrinterManager {
                     printerName,
                     error: fastError.message
                   });
-                  runLegacy('fast_path_failed');
+                  reject(new Error(
+                    `Fast-path falló para ${printerName}: ${fastError.message}. ` +
+                    'No se usa fallback legacy por configuración.'
+                  ));
                 });
             })
             .catch((shareError) => {
-              logger.warn('[SpoolFastPath] No se pudo validar Shared/ShareName, usando legacy', {
+              logger.warn('[SpoolFastPath] No se pudo validar Shared/ShareName (sin fallback legacy)', {
                 service: 'print-agent',
                 printerId,
                 printerName,
                 error: shareError.message
               });
-              runLegacy('fast_path_check_failed');
+              reject(new Error(
+                `No se pudo validar estado Shared/ShareName para ${printerName}: ${shareError.message}. ` +
+                'No se usa fallback legacy por configuración.'
+              ));
             });
         } catch (err) {
           logger.error(`Error durante la impresión en ${printerId}:`, err);

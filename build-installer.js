@@ -133,6 +133,10 @@ ALLOWED_ORIGINS=${config.aplicacion.vercelUrl}
 # Logs
 LOG_LEVEL=${config.avanzado.logLevel}
 
+# Spool Windows (solo fast-path)
+WINDOWS_SPOOL_FAST_PATH=true
+WINDOWS_SPOOL_FAST_PATH_TIMEOUT_MS=1200
+
 # NO usar túneles con Supabase Realtime
 # NO usar túneles con Supabase Realtime
 AUTO_TUNNEL=false
