@@ -243,6 +243,7 @@ class SupabaseRealtimeListener {
       realtimeError: this.lastRealtimeError || undefined,
       polling: this.pollingInterval ? 'activo' : 'inactivo',
       keepAlive: this.keepAliveInterval ? 'activo' : 'inactivo',
+      invoicePrinting: this.isInvoicePrintingEnabled() ? 'activo' : 'bloqueado',
       lastKeepAliveAt: this.lastKeepAliveAt || undefined,
       lastRealtimeDowntimeMs: this.lastRealtimeDowntimeMs,
       pollingAnomalyCount: this.pollingAnomalyCount,
@@ -294,6 +295,27 @@ class SupabaseRealtimeListener {
     const maxAttempts = Number.isFinite(attemptsRaw) && attemptsRaw > 0 ? Math.max(1, Math.floor(attemptsRaw)) : 1;
     const delayMs = Number.isFinite(delayRaw) && delayRaw >= 0 ? Math.max(0, Math.floor(delayRaw)) : 250;
     return { maxAttempts, delayMs };
+  }
+
+  isInvoicePrintingEnabled(env = process.env) {
+    const raw = env.ENABLE_INVOICE_PRINTING ?? env.ENABLE_FACTURA_PRINTING ?? 'false';
+    return String(raw).toLowerCase() === 'true';
+  }
+
+  isCustomerWelcomeTicketEnabled(env = process.env) {
+    const raw = env.ENABLE_CUSTOMER_WELCOME_TICKET ?? 'true';
+    return String(raw).toLowerCase() !== 'false';
+  }
+
+  getCustomerWelcomePointsForSale(order = {}) {
+    const rawExplicit = order?.puntos_generados;
+    if (rawExplicit !== undefined && rawExplicit !== null && String(rawExplicit).trim() !== '') {
+      const explicit = Number(rawExplicit);
+      if (Number.isFinite(explicit) && explicit >= 0) return Math.floor(explicit);
+    }
+    const total = Number(order?.total);
+    if (Number.isFinite(total) && total > 0) return Math.floor(total);
+    return 0;
   }
 
   shouldUseAsyncInvoice(options = {}) {
@@ -1015,6 +1037,13 @@ class SupabaseRealtimeListener {
     } = context;
     const correlationId = traceContext.correlationId || createCorrelationId();
 
+    if (!this.isInvoicePrintingEnabled()) {
+      logger.info(`[Factura] Pedido #${num}: impresión de factura bloqueada por configuración (ENABLE_INVOICE_PRINTING=false)`, {
+        service: 'supabase-listener'
+      });
+      return;
+    }
+
     const lookupStartedAt = performance.now();
     try {
       const facturaLookup = await this.fetchFacturaWithRetry(lomiteriaId, order.id, {
@@ -1241,6 +1270,77 @@ class SupabaseRealtimeListener {
         });
       }
 
+      if (!invoiceOnly && !kitchenOnly && !reprintSolicitudId && this.isCustomerWelcomeTicketEnabled()) {
+        try {
+          const customerTicketStart = performance.now();
+          const welcomeData = {
+            brandName: orderData?.lomiteriaName,
+            lomiteriaName: orderData?.lomiteriaName,
+            orderId: orderData?.orderId || num,
+            customerName: orderData?.customerName,
+            isRegisteredCustomer: orderData?.isRegisteredCustomer,
+            customerPointsTotal: orderData?.customerPointsTotal,
+            pointsGeneratedInSale: orderData?.pointsGeneratedInSale,
+            pointsEqText: process.env.CUSTOMER_WELCOME_POINTS_EQ_TEXT || '1 punto = 1 Gs'
+          };
+          await this.emitTraceEvent({
+            correlationId,
+            orderId: order.id,
+            stage: 'agent_render_start',
+            meta: { ticket: 'cliente', printer_id: printerId, printer_name: printerName, copies: 1 }
+          });
+          const customerBuffer = TicketGenerator.generateCustomerWelcomeTicket(welcomeData);
+          const customerRenderMs = Math.round(performance.now() - customerTicketStart);
+          await this.emitTraceEvent({
+            correlationId,
+            orderId: order.id,
+            stage: 'agent_render_done',
+            meta: {
+              ticket: 'cliente',
+              printer_id: printerId,
+              printer_name: printerName,
+              copies: 1,
+              payload_size: customerBuffer.length,
+              render_ms: customerRenderMs
+            }
+          });
+
+          const customerSpoolStart = performance.now();
+          await this.emitTraceEvent({
+            correlationId,
+            orderId: order.id,
+            stage: 'spool_submit',
+            meta: {
+              ticket: 'cliente',
+              printer_id: printerId,
+              printer_name: printerName,
+              copies: 1,
+              payload_size: customerBuffer.length
+            }
+          });
+          await printerManager.print(printerId, customerBuffer);
+          const customerSpoolMs = Math.round(performance.now() - customerSpoolStart);
+          await this.emitTraceEvent({
+            correlationId,
+            orderId: order.id,
+            stage: 'spool_ack',
+            meta: {
+              ticket: 'cliente',
+              printer_id: printerId,
+              printer_name: printerName,
+              copies: 1,
+              payload_size: customerBuffer.length,
+              spool_ms: customerSpoolMs
+            }
+          });
+          logger.info(`[Cliente] Pedido #${num}: ticket de bienvenida impreso.`, { service: 'supabase-listener' });
+        } catch (customerErr) {
+          logger.warn(`[Cliente] Pedido #${num}: no se pudo imprimir ticket de bienvenida: ${customerErr.message}`, {
+            service: 'supabase-listener'
+          });
+        }
+      }
+
       if (!kitchenOnly) {
         const invoiceContext = { lomiteriaId, printerId, printerName, num, kitchenOnly, invoiceOnly, reprintSolicitudId, traceContext: { correlationId, sourceTrigger } };
         if (this.shouldUseAsyncInvoice(options)) {
@@ -1354,15 +1454,20 @@ class SupabaseRealtimeListener {
       // Obtener datos del cliente si existe
       let customerName = 'Cliente';
       let deliveryAddress = null;
+      let isRegisteredCustomer = false;
+      let customerPointsTotal = 0;
+      const pointsGeneratedInSale = this.getCustomerWelcomePointsForSale(order);
       if (order.cliente_id) {
         const { data: cliente } = await this.supabase
           .from('clientes')
-          .select('nombre, direccion')
+          .select('nombre, direccion, puntos_totales')
           .eq('id', order.cliente_id)
           .single();
         
         if (cliente) {
           customerName = cliente.nombre;
+          isRegisteredCustomer = true;
+          customerPointsTotal = Number(cliente.puntos_totales || 0);
           // Si es delivery, usar la dirección del cliente
           if (order.tipo === 'delivery' && cliente.direccion) {
             deliveryAddress = cliente.direccion;
@@ -1378,6 +1483,9 @@ class SupabaseRealtimeListener {
         orderType: order.tipo || 'local',
         orderNotes: order.notas || null,
         deliveryAddress: deliveryAddress,
+        isRegisteredCustomer,
+        customerPointsTotal,
+        pointsGeneratedInSale,
         createdAt: order.created_at || new Date().toISOString(),
         items: (items || []).map(item => ({
           name: item.producto_nombre || item.nombre || 'Producto',
@@ -1398,6 +1506,9 @@ class SupabaseRealtimeListener {
         tableNumber: null,
         customerName: 'Cliente',
         lomiteriaName: 'Lomitería',
+        isRegisteredCustomer: false,
+        customerPointsTotal: 0,
+        pointsGeneratedInSale: 0,
         createdAt: order.created_at || new Date().toISOString(),
         items: []
       };

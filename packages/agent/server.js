@@ -81,6 +81,11 @@ if (typeof global !== 'undefined') {
   global.MAX_HISTORY = MAX_HISTORY;
 }
 
+function isInvoicePrintingEnabled(env = process.env) {
+  const raw = env.ENABLE_INVOICE_PRINTING ?? env.ENABLE_FACTURA_PRINTING ?? 'false';
+  return String(raw).toLowerCase() === 'true';
+}
+
 // Manejo de errores no capturados para debugging
 process.on('uncaughtException', (error) => {
   console.error('❌ ERROR NO CAPTURADO:', error);
@@ -529,6 +534,12 @@ app.post('/print', async (req, res) => {
       return res.status(400).json({ error: 'tipo debe ser "cocina" o "factura"' });
     }
 
+    if (tipo === 'factura' && !isInvoicePrintingEnabled()) {
+      return res.status(409).json({
+        error: 'Impresión de facturas deshabilitada por configuración (ENABLE_INVOICE_PRINTING=false)'
+      });
+    }
+
     let ticketBuffer;
 
     // Generar los comandos ESC/POS según el tipo
@@ -623,6 +634,11 @@ app.post('/api/print/kitchen-ticket', async (req, res) => {
  */
 app.post('/api/print/invoice', async (req, res) => {
   try {
+    if (!isInvoicePrintingEnabled()) {
+      return res.status(409).json({
+        error: 'Impresión de facturas deshabilitada por configuración (ENABLE_INVOICE_PRINTING=false)'
+      });
+    }
     const { printerId, invoiceData } = req.body;
     if (!printerId || !invoiceData) {
       return res.status(400).json({ error: 'printerId y invoiceData son requeridos' });

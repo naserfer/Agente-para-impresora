@@ -38,3 +38,21 @@ test('full emission uses async invoice to avoid blocking kitchen', () => {
   assert.equal(listener.shouldUseAsyncInvoice({ kitchenOnly: true }), false);
   assert.equal(listener.shouldUseAsyncInvoice({ invoiceOnly: true }), false);
 });
+
+test('invoice printing toggle is disabled by default and can be enabled', () => {
+  assert.equal(listener.isInvoicePrintingEnabled({}), false);
+  assert.equal(listener.isInvoicePrintingEnabled({ ENABLE_INVOICE_PRINTING: 'true' }), true);
+  assert.equal(listener.isInvoicePrintingEnabled({ ENABLE_INVOICE_PRINTING: 'false' }), false);
+});
+
+test('customer welcome ticket toggle is enabled by default and can be disabled', () => {
+  assert.equal(listener.isCustomerWelcomeTicketEnabled({}), true);
+  assert.equal(listener.isCustomerWelcomeTicketEnabled({ ENABLE_CUSTOMER_WELCOME_TICKET: 'true' }), true);
+  assert.equal(listener.isCustomerWelcomeTicketEnabled({ ENABLE_CUSTOMER_WELCOME_TICKET: 'false' }), false);
+});
+
+test('customer points for sale prefers explicit puntos_generados', () => {
+  assert.equal(listener.getCustomerWelcomePointsForSale({ puntos_generados: 18, total: 999 }), 18);
+  assert.equal(listener.getCustomerWelcomePointsForSale({ puntos_generados: null, total: 123.8 }), 123);
+  assert.equal(listener.getCustomerWelcomePointsForSale({}), 0);
+});

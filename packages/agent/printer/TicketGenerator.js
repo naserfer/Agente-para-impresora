@@ -175,6 +175,12 @@ function formatInvoiceDetailLine(item, width) {
   return `${line}\n${second}`;
 }
 
+function formatPointsValue(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n) || n < 0) return '0';
+  return Math.floor(n).toLocaleString('es-PY');
+}
+
 // Crear un dispositivo virtual para generar comandos
 class VirtualDevice {
   constructor() {
@@ -218,6 +224,8 @@ class TicketGenerator {
     // Cuerpo: size(1,0) = doble ancho, alto normal → mucha menos altura que (1,1), ~20 cols en 80 mm
     const BODY_W = 1;
     const BODY_H = 0;
+    const ITEM_W = 1;
+    const ITEM_H = 1;
     const WRAP_ITEM = 24;
     const WRAP_MODIF = 24;
     const WRAP_NOTES = 24;
@@ -246,15 +254,14 @@ class TicketGenerator {
         .style('B')
         .text(toCP850(`${lomiteriaName}\n`))
         .style('NORMAL')
-        .size(0, 0)
-        .text(toCP850(kitchenSepFull('=', false)));
+        .size(0, 0);
 
       // ========================================
       // NÚMERO DE ORDEN (2,2 en lugar de 3,3 = menos altura, sigue muy visible)
       // ========================================
       printer
         .align('ct')
-        .size(2, 2)
+        .size(2, 1)
         .style('B')
         .text(toCP850(`#${orderData.orderId || orderData.numeroPedido || 'N/A'}\n`))
         .style('NORMAL')
@@ -279,7 +286,7 @@ class TicketGenerator {
 
       printer
         .align('ct')
-        .size(2, 2)
+        .size(2, 1)
         .style('B')
         .text(toCP850(`[ ${tipoPedido} ]\n`))
         .style('NORMAL')
@@ -346,7 +353,7 @@ class TicketGenerator {
         const cantidad = (item.cantidad || item.quantity || 1);
         const nombre = item.nombre || item.name || 'Item';
 
-        printer.font('a').size(BODY_W, BODY_H).style('B');
+        printer.font('a').size(ITEM_W, ITEM_H).style('B');
         const itemLines = wrapQuantityNameLine(cantidad, nombre, WRAP_ITEM);
         itemLines.forEach((ln) => {
           printer.text(toCP850(`${ln}\n`));
@@ -373,7 +380,6 @@ class TicketGenerator {
         .font('a')
         .align('ct')
         .size(BODY_W, BODY_H)
-        .text(toCP850(sepBody('=')))
         .align('lt');
 
       // ========================================
@@ -392,15 +398,9 @@ class TicketGenerator {
         });
       }
 
-      // Pie: marca más visible que el texto normal; interlineado estándar antes del corte
+      // Pie: sin marca comercial (se mueve al ticket de cliente)
       printer
-        .align('ct')
-        .font('a')
         .lineSpace()
-        .size(1, 1)
-        .style('B')
-        .text(toCP850('KaruBox.com.py\n'))
-        .style('NORMAL')
         .align('lt')
         .feed(1)
         .cut()
@@ -428,6 +428,92 @@ class TicketGenerator {
         .text(toCP850('PRUEBA OK\n'))
         .style('NORMAL')
         .text(toCP850(`${t}\n`))
+        .feed(1)
+        .cut()
+        .close();
+    });
+
+    return device.getBuffer();
+  }
+
+  /**
+   * Ticket de bienvenida/fidelización para cliente final.
+   * - Registrado: muestra nombre, pedido y puntos.
+   * - No registrado: CTA para registrarse en la próxima compra.
+   * @param {Object} data
+   */
+  static generateCustomerWelcomeTicket(data = {}) {
+    const device = new VirtualDevice();
+    const printer = new escpos.Printer(device);
+    const isRegistered = Boolean(data.isRegisteredCustomer);
+    const orderNumber = data.orderId || data.numeroPedido || 'N/A';
+    const customerName = data.customerName || 'Cliente';
+    const pointsTotal = formatPointsValue(data.customerPointsTotal);
+    const pointsGenerated = formatPointsValue(data.pointsGeneratedInSale);
+    const brand = data.brandName || data.lomiteriaName || 'ATLAS BURGUER';
+    const qrUrl = String(data.qrUrl || process.env.KARUBOX_QR_URL || 'https://karubox.com.py').trim();
+    const thinSep = '-'.repeat(24);
+
+    device.open(() => {
+      const esc = Buffer.from([0x1B, 0x74, 0x01]); // CP850
+      device.write(esc, () => {});
+
+      printer
+        .encode('CP850')
+        .align('ct')
+        .font('a')
+        .size(1, 0)
+        .style('B')
+        .text(toCP850(`${brand}\n`))
+        .style('NORMAL')
+        .size(0, 0);
+
+      // Foco principal: numero de pedido grande y centrado
+      printer
+        .align('ct')
+        .size(3, 3)
+        .style('B')
+        .text(toCP850(`#${orderNumber}\n`))
+        .style('NORMAL')
+        .size(1, 0)
+        .text(toCP850(`${thinSep}\n`))
+        .align('lt')
+        .text(toCP850(`${customerName}\n`))
+        .feed(1);
+
+      if (isRegistered) {
+        const pointsLabelWidth = 12;
+        const row = (label, value) => `${String(label).padEnd(pointsLabelWidth)}: ${value}\n`;
+        printer
+          .size(1, 1)
+          .style('B')
+          .text(toCP850('MIS PUNTOS\n'))
+          .size(1, 0)
+          .style('NORMAL')
+          .text(toCP850(row('Ganados hoy', `+${pointsGenerated}`)))
+          .style('B')
+          .text(toCP850(row('Saldo total', `${pointsTotal} Gs`)))
+          .style('NORMAL');
+      } else {
+        printer
+          .style('B')
+          .text(toCP850('SUMA PUNTOS\n'))
+          .style('NORMAL')
+          .text(toCP850('Registrate en tu proxima compra\n'))
+          .text(toCP850('y empeza a sumar beneficios.\n'))
+          .text(toCP850('Pedi tu alta en caja.\n'))
+          .style('NORMAL');
+      }
+
+      // Pie minimalista: KaruBox abajo izquierda + QR pequeno abajo derecha
+      printer
+        .align('rt')
+        .style('NORMAL')
+        .raw(buildEpsonQrCodePayload(qrUrl, 4))
+        .align('lt')
+        .size(1, 0)
+        .style('B')
+        .text(toCP850('KaruBox.com.py\n'))
         .feed(1)
         .cut()
         .close();
