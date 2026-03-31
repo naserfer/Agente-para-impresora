@@ -69,6 +69,51 @@ function getWindowsSpoolFastPathTimeoutMs(env = process.env) {
   return Math.max(raw, 200);
 }
 
+function getWindowsShareCheckTimeoutMs(env = process.env) {
+  const raw = parseInt(String(env.WINDOWS_SHARE_CHECK_TIMEOUT_MS || '5000'), 10);
+  if (!Number.isFinite(raw) || raw <= 0) return 5000;
+  return Math.max(raw, 1000);
+}
+
+function sanitizeWindowsShareName(name) {
+  return String(name || '')
+    .trim()
+    .replace(/[^\w.-]/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function uniqueCaseInsensitive(values = []) {
+  const seen = new Set();
+  const out = [];
+  for (const v of values) {
+    const raw = String(v || '').trim();
+    if (!raw) continue;
+    const key = raw.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(raw);
+  }
+  return out;
+}
+
+function buildFastPathHostCandidates(env = process.env) {
+  return uniqueCaseInsensitive([
+    env.WINDOWS_SPOOL_FAST_PATH_HOST,
+    '127.0.0.1',
+    'localhost',
+    env.COMPUTERNAME
+  ]);
+}
+
+function buildFastPathShareCandidates(printerName, shareInfo = {}, env = process.env) {
+  const sanitized = sanitizeWindowsShareName(printerName);
+  return uniqueCaseInsensitive([
+    shareInfo.shareName,
+    env.WINDOWS_PRINTER_SHARE_NAME,
+    sanitized
+  ]);
+}
+
 function cleanupFiles(paths = []) {
   for (const p of paths) {
     if (!p) continue;
@@ -94,12 +139,17 @@ function getWindowsPrinterShareInfo(printerName) {
   const command = `powershell -NoProfile -Command "$p = Get-Printer -Name '${escapedName}' -ErrorAction SilentlyContinue; if ($null -eq $p) { Write-Output 'MISSING' } elseif ($p.Shared -and $p.ShareName) { Write-Output ('SHARED|' + $p.ShareName) } else { Write-Output 'NOT_SHARED' }"`;
 
   return new Promise((resolve) => {
-    exec(command, { windowsHide: true, timeout: 1500, maxBuffer: 256 * 1024 }, (error, stdout) => {
-      let result = { shared: false, shareName: null };
+    exec(command, { windowsHide: true, timeout: getWindowsShareCheckTimeoutMs(), maxBuffer: 256 * 1024 }, (error, stdout) => {
+      let result = { shared: false, shareName: null, status: 'error', checked: false };
       if (!error) {
         const out = String(stdout || '').trim();
+        result.checked = true;
         if (out.startsWith('SHARED|')) {
-          result = { shared: true, shareName: out.slice('SHARED|'.length).trim() || null };
+          result = { shared: true, shareName: out.slice('SHARED|'.length).trim() || null, status: 'shared', checked: true };
+        } else if (out === 'NOT_SHARED') {
+          result = { shared: false, shareName: null, status: 'not_shared', checked: true };
+        } else if (out === 'MISSING') {
+          result = { shared: false, shareName: null, status: 'missing', checked: true };
         }
       }
       windowsShareInfoCache.set(key, {
@@ -113,7 +163,7 @@ function getWindowsPrinterShareInfo(printerName) {
 
 function tryWindowsFastPathCopy(printerName, data, options = {}) {
   const printData = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
-  const host = process.env.COMPUTERNAME || 'localhost';
+  const host = String(options.host || process.env.WINDOWS_SPOOL_FAST_PATH_HOST || process.env.COMPUTERNAME || 'localhost').trim();
   const shareName = String(options.shareName || printerName || '').trim();
   const printerPath = `\\\\${host}\\${shareName}`;
   const tempFile = path.join(os.tmpdir(), `ticket-fast-${Date.now()}.raw`);
@@ -140,6 +190,27 @@ function tryWindowsFastPathCopy(printerName, data, options = {}) {
       });
     });
   });
+}
+
+async function tryWindowsFastPathMatrix(printerName, data, shareInfo = {}, env = process.env, copyFn = tryWindowsFastPathCopy) {
+  const hosts = buildFastPathHostCandidates(env);
+  const shares = buildFastPathShareCandidates(printerName, shareInfo, env);
+  let lastError = null;
+
+  for (const host of hosts) {
+    for (const shareName of shares) {
+      try {
+        const result = await copyFn(printerName, data, { host, shareName });
+        return { ...result, host, shareName };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+  }
+
+  const attempts = hosts.length * shares.length;
+  const reason = lastError?.message || 'sin detalle';
+  throw new Error(`fast-path failed tras ${attempts} intento(s): ${reason}`);
 }
 
 function printWindowsLegacy(printerName, data) {
@@ -803,22 +874,20 @@ class PrinterManager {
           getWindowsPrinterShareInfo(printerName)
             .then((shareInfo) => {
               if (!shareInfo.shared || !shareInfo.shareName) {
-                logger.warn('[SpoolFastPath] Impresora no compartida, no hay fallback legacy', {
+                logger.warn('[SpoolFastPath] Shared/ShareName no confirmado; se intentará fast-path con hosts/shares alternativos', {
                   service: 'print-agent',
                   printerId,
-                  printerName
+                  printerName,
+                  share_check_status: shareInfo.status || 'unknown'
                 });
-                reject(new Error(
-                  `Fast-path requiere impresora compartida en Windows: ${printerName}. ` +
-                  'Compartila y asegurá que tenga ShareName para imprimir.'
-                ));
-                return;
               }
-              return tryWindowsFastPathCopy(printerName, printData, { shareName: shareInfo.shareName })
+              return tryWindowsFastPathMatrix(printerName, printData, shareInfo)
                 .then((result) => {
                   finishWithMetrics('fast', false, null, {
                     fast_path_ms: result.elapsedMs,
-                    printer_path: result.printerPath
+                    printer_path: result.printerPath,
+                    fast_path_host: result.host,
+                    fast_path_share: result.shareName
                   });
                 })
                 .catch((fastError) => {
@@ -830,7 +899,7 @@ class PrinterManager {
                   });
                   reject(new Error(
                     `Fast-path falló para ${printerName}: ${fastError.message}. ` +
-                    'No se usa fallback legacy por configuración.'
+                    'No se usa fallback legacy por configuración. Probá compartir la impresora y validar \\\\127.0.0.1\\<ShareName>.'
                   ));
                 });
             })
@@ -1044,5 +1113,14 @@ class PrinterManager {
   }
 }
 
-module.exports = new PrinterManager();
+const printerManager = new PrinterManager();
+printerManager._test = {
+  buildFastPathHostCandidates,
+  buildFastPathShareCandidates,
+  tryWindowsFastPathMatrix,
+  sanitizeWindowsShareName,
+  getWindowsShareCheckTimeoutMs
+};
+
+module.exports = printerManager;
 
