@@ -19,6 +19,29 @@ let isQuitting = false;
 // Se usa para forzar un reset por usuario Windows cuando se cambia el cliente/build.
 let agentInstallIdFromBuild = null;
 
+function getAppIconCandidates() {
+  const isDev = !app.isPackaged;
+  return [
+    // Desarrollo (repo)
+    isDev ? join(__dirname, '../../assets/icon.ico') : null,
+    isDev ? join(__dirname, '../../assets/icon.png') : null,
+    // Empaquetado (buildResources se copia a resources/assets)
+    join(process.resourcesPath, 'assets/icon.ico'),
+    join(process.resourcesPath, 'assets/icon.png'),
+    // Algunos layouts/paths alternativos (por compatibilidad)
+    join(app.getAppPath(), 'assets/icon.ico'),
+    join(app.getAppPath(), 'assets/icon.png'),
+  ].filter(Boolean);
+}
+
+function pickExistingIconPath() {
+  const candidates = getAppIconCandidates();
+  for (const p of candidates) {
+    if (p && existsSync(p)) return p;
+  }
+  return null;
+}
+
 function getAgentLogFileCandidates() {
   const appDataPath = process.env.APPDATA || process.env.LOCALAPPDATA || os.homedir();
   const devAgentLog = join(__dirname, '../../agent/logs/combined.log');
@@ -140,10 +163,9 @@ function createTray() {
   // Intentar múltiples rutas para el icono
   let iconPath = null;
   const possiblePaths = [
-    isDev ? join(__dirname, '../../assets/icon.png') : null,
-    join(app.getAppPath(), 'assets/icon.png'),
+    ...getAppIconCandidates(),
+    join(process.resourcesPath, '../assets/icon.ico'),
     join(process.resourcesPath, '../assets/icon.png'),
-    join(process.resourcesPath, 'assets/icon.png'),
   ].filter(Boolean);
   
   for (const path of possiblePaths) {
@@ -251,6 +273,8 @@ function createWindow() {
   // App kiosko/controlado: ocultar menú nativo de Electron (File/Edit/View...)
   Menu.setApplicationMenu(null);
 
+  const iconPath = pickExistingIconPath();
+
   mainWindow = new BrowserWindow({
     width: 980,
     height: 660,
@@ -266,7 +290,7 @@ function createWindow() {
       contextIsolation: true,
       sandbox: false, // Deshabilitar sandbox para permitir preload
     },
-    // icon: join(__dirname, '../../assets/icon.png'), // TODO: Agregar icono
+    ...(iconPath ? { icon: iconPath } : {}),
     titleBarStyle: 'default',
   });
 
@@ -1777,6 +1801,14 @@ function sendLogToRenderer(message, level = 'log') {
 // App lifecycle
 app.whenReady().then(() => {
   console.log('🚀 Aplicación iniciando...');
+
+  // Importante en Windows: ayuda a que el icono en la barra de tareas sea el correcto.
+  // Debe setearse antes de crear ventanas.
+  if (process.platform === 'win32') {
+    try {
+      app.setAppUserModelId('com.lomiteria.print-agent');
+    } catch (_) {}
+  }
 
   // Reset por consola: solo nosotros (soporte) ejecutamos agente.exe --reset-config
   if (process.argv.includes('--reset-config')) {
