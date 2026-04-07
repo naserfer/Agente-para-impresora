@@ -23,6 +23,10 @@ const os = require('os');
 const { exec } = require('child_process');
 const logger = require('../logger');
 
+function isPhysicalPrintingDisabled() {
+  return String(process.env.DISABLE_PHYSICAL_PRINTING || '').toLowerCase() === 'true';
+}
+
 // Archivo para persistir configuraciones de impresoras
 // Si está corriendo desde Electron (en Program Files), usar userData
 // Si está en desarrollo, usar el directorio del proyecto
@@ -825,6 +829,18 @@ class PrinterManager {
    */
   async print(printerId, data, options = {}) {
     return new Promise((resolve, reject) => {
+      if (isPhysicalPrintingDisabled()) {
+        logger.warn(
+          '[PRINT] Impresión bloqueada: DISABLE_PHYSICAL_PRINTING=true (emergencia; no se envía nada al spooler).',
+          { service: 'print-agent', printerId }
+        );
+        return reject(
+          new Error(
+            'Impresión física deshabilitada (DISABLE_PHYSICAL_PRINTING=true). Quitá esta variable o ponela en false para volver a imprimir.'
+          )
+        );
+      }
+
       // PASO 1: Buscar la impresora en la lista usando el printerId
       // El printerId identifica qué lomitería es y qué impresora usar
       const printerConfig = this.printers.get(printerId);

@@ -224,6 +224,19 @@ class SupabaseRealtimeListener {
     }
     this.initialEmissionInFlightPedidoIds.add(id);
     try {
+      // Fuera de ventana (created_at): no imprimir nunca por emisión inicial y dejar de reintentar (polling).
+      if (this.isAutomaticPrintBlockedByOrderAge(order)) {
+        const maxMin =
+          process.env.PRINT_ORDER_MAX_AGE_MINUTES === undefined || process.env.PRINT_ORDER_MAX_AGE_MINUTES === ''
+            ? 10
+            : parseInt(String(process.env.PRINT_ORDER_MAX_AGE_MINUTES), 10);
+        logger.info(
+          `[CicloVida] Pedido ${id}: omitido para emisión inicial (creado hace más de ${Number.isFinite(maxMin) && maxMin > 0 ? maxMin : 10} min). No más reintentos.`,
+          { service: 'supabase-listener' }
+        );
+        this._markInitialEmissionPrinted(id);
+        return;
+      }
       const ok = await this.printOrder(order, { traceContext });
       if (ok) this._markInitialEmissionPrinted(id);
     } finally {
@@ -257,7 +270,8 @@ class SupabaseRealtimeListener {
       lastFacturaBumpPollAt: this.lastFacturaBumpPollAt || undefined,
       lastFacturaBumpPollCount: this.lastFacturaBumpPollCount,
       lastFacturaBumpPollError: this.lastFacturaBumpPollError || undefined,
-      receivingOrders: this.isListening || (this.pollingInterval != null)
+      receivingOrders: this.isListening || (this.pollingInterval != null),
+      physicalPrintingDisabled: String(process.env.DISABLE_PHYSICAL_PRINTING || '').toLowerCase() === 'true'
     };
   }
 
