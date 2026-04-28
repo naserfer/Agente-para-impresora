@@ -1,0 +1,99 @@
+
+╔═══════════════════════════════════════════════════════════╗
+║                                                           ║
+║       MANUAL DE USUARIO - AGENTE DE IMPRESIÓN            ║
+║              Oriental 8                             ║
+║                                                           ║
+╚═══════════════════════════════════════════════════════════╝
+
+📋 CONTENIDO
+
+1. Instalación
+2. Configuración Inicial
+3. Uso Diario
+4. Solución de Problemas
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1️⃣  INSTALACIÓN
+
+Paso 1: Conectar la impresora
+   • Conecta la impresora térmica Epson al puerto USB
+   • Enciende la impresora
+   • Windows instalará los drivers automáticamente
+
+Paso 2: Instalar el agente
+   • Ejecuta: Agente de Impresión Setup.exe
+   • Sigue el asistente de instalación
+   • Acepta la ubicación de instalación
+
+Paso 3: Primera ejecución
+   • El programa se abrirá automáticamente
+   • Aparecerá un asistente de configuración
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+2️⃣  CONFIGURACIÓN INICIAL (Solo primera vez)
+
+El asistente te guiará en 3 pasos:
+
+Paso 1: Información del Negocio
+   • Nombre: Oriental 8
+   • Este nombre aparecerá en los tickets
+
+Paso 2: Seleccionar Impresora
+   • Selecciona: EPSON TM-T20III Receipt
+   • ID de impresora: prn-565c0876
+   • Presiona "Finalizar"
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+3️⃣  USO DIARIO
+
+Iniciar el agente:
+   1. Abre el programa "Agente de Impresión"
+   2. Presiona el botón verde "INICIAR AGENTE"
+   3. Espera a ver "● ACTIVO - Imprimiendo automáticamente"
+   4. ¡Listo! Los tickets se imprimirán automáticamente
+
+Detener el agente:
+   • Presiona el botón rojo "DETENER AGENTE"
+
+💡 IMPORTANTE:
+   • El agente DEBE estar activo para imprimir
+   • Deja el programa abierto durante el día
+   • Los tickets se imprimen automáticamente cuando se confirma un pedido
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+4️⃣  SOLUCIÓN DE PROBLEMAS
+
+❓ El botón "INICIAR AGENTE" no funciona
+   → Verifica que la impresora esté encendida
+   → Cierra y vuelve a abrir el programa
+
+❓ No imprime los tickets
+   → Verifica que el indicador diga "● ACTIVO"
+   → Ve a la pestaña "Impresora" y verifica que esté configurada
+   → Prueba con "Imprimir Prueba"
+
+❓ La impresora no aparece en la lista
+   → Verifica que esté conectada y encendida
+   → Reinstala los drivers de la impresora
+   → Reinicia la computadora
+
+❓ Error de conexión a Supabase
+   → Verifica tu conexión a internet
+   → Contacta a soporte técnico
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📞 SOPORTE TÉCNICO
+
+Email: soporte@lomiteria.com
+Teléfono: [AGREGAR NÚMERO]
+
+Versión del software: 1.0.1
+Cliente: Oriental 8
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

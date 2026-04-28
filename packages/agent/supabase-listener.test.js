@@ -116,3 +116,159 @@ test('resolveMesaNumeroByMesaId returns null when mesa_id is missing', async () 
     listener.supabase = originalSupabase;
   }
 });
+
+test('initial emission with mesa_id runs kitchenOnly mode', async () => {
+  const originalPrintOrder = listener.printOrder;
+  const originalAgeCheck = listener.isAutomaticPrintBlockedByOrderAge;
+  const order = {
+    id: 'pedido-mesa',
+    mesa_id: 'mesa-10',
+    created_at: new Date().toISOString()
+  };
+  const calls = [];
+
+  try {
+    listener.isAutomaticPrintBlockedByOrderAge = () => false;
+    listener.initialEmissionPrintedPedidoIds.delete(order.id);
+    listener.initialEmissionInFlightPedidoIds.delete(order.id);
+    listener.printOrder = async (_order, options = {}) => {
+      calls.push(options);
+      return true;
+    };
+
+    await listener._runInitialEmissionPrint(order, { correlationId: 'corr-1' });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].kitchenOnly, true);
+  } finally {
+    listener.printOrder = originalPrintOrder;
+    listener.isAutomaticPrintBlockedByOrderAge = originalAgeCheck;
+    listener.initialEmissionPrintedPedidoIds.delete(order.id);
+    listener.initialEmissionInFlightPedidoIds.delete(order.id);
+  }
+});
+
+test('initial emission without mesa_id keeps full flow', async () => {
+  const originalPrintOrder = listener.printOrder;
+  const originalAgeCheck = listener.isAutomaticPrintBlockedByOrderAge;
+  const order = {
+    id: 'pedido-sin-mesa',
+    mesa_id: null,
+    created_at: new Date().toISOString()
+  };
+  const calls = [];
+
+  try {
+    listener.isAutomaticPrintBlockedByOrderAge = () => false;
+    listener.initialEmissionPrintedPedidoIds.delete(order.id);
+    listener.initialEmissionInFlightPedidoIds.delete(order.id);
+    listener.printOrder = async (_order, options = {}) => {
+      calls.push(options);
+      return true;
+    };
+
+    await listener._runInitialEmissionPrint(order, { correlationId: 'corr-2' });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].kitchenOnly, false);
+  } finally {
+    listener.printOrder = originalPrintOrder;
+    listener.isAutomaticPrintBlockedByOrderAge = originalAgeCheck;
+    listener.initialEmissionPrintedPedidoIds.delete(order.id);
+    listener.initialEmissionInFlightPedidoIds.delete(order.id);
+  }
+});
+
+test('reprint_solicitud tipo cocina triggers kitchenOnly print', async () => {
+  const originalSupabase = listener.supabase;
+  const originalPrintOrder = listener.printOrder;
+  const originalTenantFilter = process.env.AGENT_TENANT_IDS;
+  const rowId = 'reprint-cocina-1';
+  const calls = [];
+
+  try {
+    delete process.env.AGENT_TENANT_IDS;
+    listener.processedReprintIds.delete(rowId);
+    listener.supabase = {
+      from() {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          async single() {
+            return {
+              data: { id: 'pedido-rc1', tenant_id: 'tenant-1', estado_pedido: 'FACT' },
+              error: null
+            };
+          }
+        };
+      }
+    };
+    listener.printOrder = async (_order, options = {}) => {
+      calls.push(options);
+      return true;
+    };
+
+    await listener.processReprintRow({
+      id: rowId,
+      tenant_id: 'tenant-1',
+      pedido_id: 'pedido-rc1',
+      tipo: 'cocina'
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].kitchenOnly, true);
+    assert.equal(calls[0].invoiceOnly || false, false);
+  } finally {
+    process.env.AGENT_TENANT_IDS = originalTenantFilter;
+    listener.supabase = originalSupabase;
+    listener.printOrder = originalPrintOrder;
+    listener.processedReprintIds.delete(rowId);
+  }
+});
+
+test('reprint_solicitud tipo factura triggers invoiceOnly print', async () => {
+  const originalSupabase = listener.supabase;
+  const originalPrintOrder = listener.printOrder;
+  const originalTenantFilter = process.env.AGENT_TENANT_IDS;
+  const rowId = 'reprint-factura-1';
+  const calls = [];
+
+  try {
+    delete process.env.AGENT_TENANT_IDS;
+    listener.processedReprintIds.delete(rowId);
+    listener.supabase = {
+      from() {
+        return {
+          select() { return this; },
+          eq() { return this; },
+          async single() {
+            return {
+              data: { id: 'pedido-rf1', tenant_id: 'tenant-1', estado_pedido: 'FACT' },
+              error: null
+            };
+          }
+        };
+      }
+    };
+    listener.printOrder = async (_order, options = {}) => {
+      calls.push(options);
+      return true;
+    };
+
+    await listener.processReprintRow({
+      id: rowId,
+      tenant_id: 'tenant-1',
+      pedido_id: 'pedido-rf1',
+      tipo: 'factura'
+    });
+
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].invoiceOnly, true);
+    assert.equal(calls[0].kitchenOnly || false, false);
+  } finally {
+    process.env.AGENT_TENANT_IDS = originalTenantFilter;
+    listener.supabase = originalSupabase;
+    listener.printOrder = originalPrintOrder;
+    listener.processedReprintIds.delete(rowId);
+  }
+});

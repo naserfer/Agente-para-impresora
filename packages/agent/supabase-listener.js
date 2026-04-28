@@ -237,7 +237,14 @@ class SupabaseRealtimeListener {
         this._markInitialEmissionPrinted(id);
         return;
       }
-      const ok = await this.printOrder(order, { traceContext });
+      const hasMesaId = order?.mesa_id != null;
+      if (hasMesaId) {
+        logger.info(
+          `[Mesa] Pedido ${id}: emision inicial en modo solo cocina (factura diferida hasta cierre de cuenta).`,
+          { service: 'supabase-listener' }
+        );
+      }
+      const ok = await this.printOrder(order, { kitchenOnly: hasMesaId, traceContext });
       if (ok) this._markInitialEmissionPrinted(id);
     } finally {
       this.initialEmissionInFlightPedidoIds.delete(id);
