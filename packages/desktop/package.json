@@ -8,7 +8,7 @@
     "dev": "concurrently \"npm run dev:vite\" \"npm run dev:electron\"",
     "dev:vite": "vite",
     "dev:electron": "wait-on http://localhost:5173 && electron .",
-    "build": "vite build && electron-builder",
+    "build": "vite build && node build-scripts/prepare-icons.cjs && electron-builder",
     "build:vite": "vite build",
     "build:electron": "electron-builder",
     "preview": "vite preview"
@@ -37,6 +37,7 @@
     "concurrently": "^8.2.2",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1",
+    "png-to-ico": "^2.1.8",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.18",
     "typescript": "^5.9.3",
@@ -81,7 +82,7 @@
           ]
         }
       ],
-      "icon": "assets/icon.png",
+      "icon": "assets/icon.ico",
       "artifactName": "AgenteImpresion-${version}-Setup.${ext}"
     },
     "portable": {

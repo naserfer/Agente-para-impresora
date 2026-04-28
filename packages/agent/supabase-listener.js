@@ -1292,6 +1292,8 @@ class SupabaseRealtimeListener {
             lomiteriaName: orderData?.lomiteriaName,
             orderId: orderData?.orderId || num,
             customerName: orderData?.customerName,
+            total_a_pagar: orderData?.total,
+            total: orderData?.total,
             isRegisteredCustomer: orderData?.isRegisteredCustomer,
             customerPointsTotal: orderData?.customerPointsTotal,
             pointsGeneratedInSale: orderData?.pointsGeneratedInSale,
@@ -1489,6 +1491,16 @@ class SupabaseRealtimeListener {
         }
       }
 
+      const totalCandidate =
+        order.total_a_pagar ??
+        order.total ??
+        order.total_pedido ??
+        order.monto_total ??
+        order.importe_total ??
+        order.total_amount ??
+        0;
+      const total = Number(totalCandidate || 0);
+
       return {
         orderId: order.numero_pedido?.toString() || order.id?.toString() || 'N/A',
         tableNumber: order.mesa || order.table_number || null,
@@ -1501,6 +1513,7 @@ class SupabaseRealtimeListener {
         customerPointsTotal,
         pointsGeneratedInSale,
         createdAt: order.created_at || new Date().toISOString(),
+        total: Number.isFinite(total) ? total : 0,
         items: (items || []).map(item => ({
           name: item.producto_nombre || item.nombre || 'Producto',
           quantity: item.cantidad || 1,
@@ -1524,6 +1537,7 @@ class SupabaseRealtimeListener {
         customerPointsTotal: 0,
         pointsGeneratedInSale: 0,
         createdAt: order.created_at || new Date().toISOString(),
+        total: 0,
         items: []
       };
     }

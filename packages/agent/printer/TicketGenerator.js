@@ -458,13 +458,32 @@ class TicketGenerator {
       const esc = Buffer.from([0x1B, 0x74, 0x01]); // CP850
       device.write(esc, () => {});
 
+      // Evita cortes de palabras tipo "benefic\nio": si no entra, baja la palabra completa.
+      const COLS = thinSep.length;
+      const printWrapped = (value, cols = COLS) => {
+        const raw = String(value == null ? '' : value);
+        // Respetar saltos explícitos (si los hay) y aplicar wrap por renglón.
+        const parts = raw.split(/\r?\n/);
+        for (let i = 0; i < parts.length; i += 1) {
+          const part = parts[i];
+          if (!part.trim()) {
+            printer.text(toCP850('\n'));
+            continue;
+          }
+          const lines = wrapWords(part, cols);
+          for (const ln of lines) {
+            printer.text(toCP850(`${ln}\n`));
+          }
+        }
+      };
+
       printer
         .encode('CP850')
         .align('ct')
         .font('a')
         .size(1, 0)
         .style('B')
-        .text(toCP850(`${brand}\n`))
+        .text(toCP850(`${wrapWords(brand, COLS).join('\n')}\n`))
         .style('NORMAL')
         .size(0, 0);
 
@@ -478,7 +497,33 @@ class TicketGenerator {
         .size(1, 0)
         .text(toCP850(`${thinSep}\n`))
         .align('lt')
-        .text(toCP850(`${customerName}\n`))
+        .text(toCP850(`${wrapWords(customerName, COLS).join('\n')}\n`));
+
+      const orderTotalCandidate = (
+        data.total_a_pagar
+        ?? data.orderTotalGs
+        ?? data.orderTotal
+        ?? data.totalGs
+        ?? data.total
+        ?? data.totalAmount
+        ?? data.totalPedido
+        ?? data.montoTotal
+        ?? data.importeTotal
+      );
+      const parseGs = (v) => {
+        if (v == null || v === '') return null;
+        if (typeof v === 'number') return Number.isFinite(v) ? Math.round(v) : null;
+        const digits = String(v).trim().replace(/[^\d-]/g, '');
+        if (!digits) return null;
+        const n = Number(digits);
+        return Number.isFinite(n) ? Math.round(n) : null;
+      };
+      const orderTotalGs = parseGs(orderTotalCandidate);
+      if (orderTotalGs != null && orderTotalGs > 0) {
+        printWrapped(`${orderTotalGs.toLocaleString('es-PY')} gs.`, COLS);
+      }
+
+      printer
         .feed(1);
 
       if (isRegistered) {
@@ -487,21 +532,21 @@ class TicketGenerator {
         printer
           .size(1, 1)
           .style('B')
-          .text(toCP850('MIS PUNTOS\n'))
+          .text(toCP850(`${wrapWords('MIS PUNTOS', COLS).join('\n')}\n`))
           .size(1, 0)
           .style('NORMAL')
-          .text(toCP850(row('Ganados hoy', `+${pointsGenerated}`)))
+          .text(toCP850(`${wrapWords(row('Ganados hoy', `+${pointsGenerated}`).trimEnd(), COLS).join('\n')}\n`))
           .style('B')
-          .text(toCP850(row('Saldo total', `${pointsTotal} Gs`)))
+          .text(toCP850(`${wrapWords(row('Saldo total', `${pointsTotal} Gs`).trimEnd(), COLS).join('\n')}\n`))
           .style('NORMAL');
       } else {
         printer
           .style('B')
-          .text(toCP850('SUMA PUNTOS\n'))
+          .text(toCP850(`${wrapWords('SUMA PUNTOS', COLS).join('\n')}\n`))
           .style('NORMAL')
-          .text(toCP850('Registrate en tu proxima compra\n'))
-          .text(toCP850('y empeza a sumar beneficios.\n'))
-          .text(toCP850('Pedi tu alta en caja.\n'))
+          .text(toCP850(`${wrapWords('Registrate en tu proxima compra', COLS).join('\n')}\n`))
+          .text(toCP850(`${wrapWords('y empeza a sumar beneficios.', COLS).join('\n')}\n`))
+          .text(toCP850(`${wrapWords('Pedi tu alta en caja.', COLS).join('\n')}\n`))
           .style('NORMAL');
       }
 
@@ -513,7 +558,7 @@ class TicketGenerator {
         .align('lt')
         .size(1, 0)
         .style('B')
-        .text(toCP850('KaruBox.com.py\n'))
+        .text(toCP850(`${wrapWords('KaruBox.com.py', COLS).join('\n')}\n`))
         .feed(1)
         .cut()
         .close();
