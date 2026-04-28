@@ -5,7 +5,7 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "nodemon server.js",
+    "dev": "nodemon --ignore \"**/printers-config.json\" --ignore \"**/logs/**\" server.js",
     "dev:with-gui": "concurrently \"npm run dev\" \"cd ../desktop && npm run dev\" --names \"AGENT,GUI\" --prefix-colors \"blue,green\"",
     "pm2:start": "pm2 start server.js --name print-agent",
     "pm2:stop": "pm2 stop print-agent",

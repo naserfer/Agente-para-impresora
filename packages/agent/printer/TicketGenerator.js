@@ -267,6 +267,17 @@ class TicketGenerator {
         .style('NORMAL')
         .size(0, 0);
 
+      const mesaNumero = orderData.tableNumber || orderData.mesaNumero || null;
+      if (mesaNumero != null && String(mesaNumero).trim() !== '') {
+        printer
+          .align('ct')
+          .size(1, 1)
+          .style('B')
+          .text(toCP850(`Mesa #${String(mesaNumero).trim()}\n`))
+          .style('NORMAL')
+          .size(0, 0);
+      }
+
       // ========================================
       // TIPO DE PEDIDO (DESTACADO)
       // ========================================
@@ -322,10 +333,6 @@ class TicketGenerator {
         .size(BODY_W, BODY_H)
         .style('B')
         .text(toCP850(infoRow('Hora:', hora)));
-
-      if (orderData.tableNumber || orderData.mesa) {
-        printer.text(toCP850(infoRow('Mesa:', orderData.tableNumber || orderData.mesa)));
-      }
 
       if (orderData.customerName || orderData.cliente?.nombre) {
         const cliente = orderData.customerName || orderData.cliente?.nombre;

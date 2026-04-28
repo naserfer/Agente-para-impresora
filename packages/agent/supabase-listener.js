@@ -984,10 +984,9 @@ class SupabaseRealtimeListener {
           }
           if (oldRecord && oldRecord.estado_pedido === 'FACT') {
             logger.debug(
-              `Pedido ${order.id}: UPDATE con pedido ya FACT (sin transición), ignorando emisión inicial`,
+              `Pedido ${order.id}: UPDATE con pedido ya FACT (sin transición). Se intenta emisión inicial con idempotencia por si se perdió el primer evento FACT.`,
               { service: 'supabase-listener' }
             );
-            return;
           }
         } else if (eventType === 'INSERT') {
           // Compatibilidad: instalaciones que insertan ya en FACT
@@ -1170,6 +1169,27 @@ class SupabaseRealtimeListener {
       logger.debug(`[Factura] Pedido #${num}: excepción al imprimir factura: ${factEx.message}`, { service: 'supabase-listener' });
       logger.info(`[Timing] Pedido #${num}: factura_lookup_ms=${lookupMs} (exception)`, { service: 'supabase-listener' });
     }
+  }
+
+  async resolveMesaNumeroByMesaId(order = {}) {
+    const mesaId = order?.mesa_id;
+    const tenantId = order?.tenant_id || order?.lomiteria_id || order?.tenantId;
+    if (!mesaId || !tenantId || !this.supabase) {
+      return null;
+    }
+
+    const { data, error } = await this.supabase
+      .from('mesas')
+      .select('numero')
+      .eq('id', mesaId)
+      .eq('tenant_id', tenantId)
+      .maybeSingle();
+
+    if (error || !data || data.numero == null || String(data.numero).trim() === '') {
+      return null;
+    }
+
+    return String(data.numero).trim();
   }
 
   /**
@@ -1501,9 +1521,11 @@ class SupabaseRealtimeListener {
         0;
       const total = Number(totalCandidate || 0);
 
+      const mesaNumero = await this.resolveMesaNumeroByMesaId(order);
+
       return {
         orderId: order.numero_pedido?.toString() || order.id?.toString() || 'N/A',
-        tableNumber: order.mesa || order.table_number || null,
+        tableNumber: mesaNumero,
         customerName: customerName,
         lomiteriaName: lomiteriaName,
         orderType: order.tipo || 'local',

@@ -56,3 +56,63 @@ test('customer points for sale prefers explicit puntos_generados', () => {
   assert.equal(listener.getCustomerWelcomePointsForSale({ puntos_generados: null, total: 123.8 }), 123);
   assert.equal(listener.getCustomerWelcomePointsForSale({}), 0);
 });
+
+test('resolveMesaNumeroByMesaId returns mesa number when mesa_id exists', async () => {
+  const originalSupabase = listener.supabase;
+  const seen = { table: null, filters: {} };
+
+  try {
+    const query = {
+      select() { return this; },
+      eq(column, value) {
+        seen.filters[column] = value;
+        return this;
+      },
+      async maybeSingle() {
+        return { data: { numero: 12 }, error: null };
+      }
+    };
+
+    listener.supabase = {
+      from(table) {
+        seen.table = table;
+        return query;
+      }
+    };
+
+    const mesaNumero = await listener.resolveMesaNumeroByMesaId({
+      mesa_id: 'mesa-1',
+      tenant_id: 'tenant-1'
+    });
+
+    assert.equal(seen.table, 'mesas');
+    assert.equal(seen.filters.id, 'mesa-1');
+    assert.equal(seen.filters.tenant_id, 'tenant-1');
+    assert.equal(mesaNumero, '12');
+  } finally {
+    listener.supabase = originalSupabase;
+  }
+});
+
+test('resolveMesaNumeroByMesaId returns null when mesa_id is missing', async () => {
+  const originalSupabase = listener.supabase;
+  let queried = false;
+
+  try {
+    listener.supabase = {
+      from() {
+        queried = true;
+        return null;
+      }
+    };
+
+    const mesaNumero = await listener.resolveMesaNumeroByMesaId({
+      tenant_id: 'tenant-1'
+    });
+
+    assert.equal(mesaNumero, null);
+    assert.equal(queried, false);
+  } finally {
+    listener.supabase = originalSupabase;
+  }
+});

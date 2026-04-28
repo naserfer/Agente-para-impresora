@@ -52,12 +52,12 @@ if (process.env.ELECTRON_RUN_AS_NODE) {
       }
     } catch (tempError) {
       logger.warn('⚠️ No se pudo crear directorio para printers-config, usando directorio actual');
-      PRINTERS_CONFIG_FILE = path.join(__dirname, '../../printers-config.json');
+      PRINTERS_CONFIG_FILE = path.join(__dirname, '../printers-config.json');
     }
   }
 } else {
   // Desarrollo o ejecución directa, usar directorio del proyecto
-  PRINTERS_CONFIG_FILE = path.join(__dirname, '../../printers-config.json');
+  PRINTERS_CONFIG_FILE = path.join(__dirname, '../printers-config.json');
 }
 
 const WINDOWS_SHARE_CACHE_TTL_MS = 5 * 60 * 1000;
