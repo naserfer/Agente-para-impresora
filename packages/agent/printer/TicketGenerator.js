@@ -34,14 +34,14 @@ function renderGreetingRasterImage(text) {
   const content = String(text == null ? '' : text).trim();
   if (!content) return null;
   try {
-    const fontSizePx = 46;
+    const fontSizePx = 42;
     const padX = 26;
     const padY = 16;
     const fontFamily = '"Microsoft YaHei", "SimHei", "Noto Sans CJK SC", sans-serif';
 
     const probe = createCanvas(1, 1);
     const probeCtx = probe.getContext('2d');
-    probeCtx.font = `700 ${fontSizePx}px ${fontFamily}`;
+    probeCtx.font = `400 ${fontSizePx}px ${fontFamily}`;
     const metrics = probeCtx.measureText(content);
     const textWidth = Math.max(1, Math.ceil(metrics.width || content.length * fontSizePx));
     const textAscent = Math.ceil(metrics.actualBoundingBoxAscent || fontSizePx);
@@ -56,7 +56,7 @@ function renderGreetingRasterImage(text) {
     ctx.fillStyle = '#FFFFFF';
     ctx.fillRect(0, 0, width, height);
     ctx.fillStyle = '#000000';
-    ctx.font = `700 ${fontSizePx}px ${fontFamily}`;
+    ctx.font = `400 ${fontSizePx}px ${fontFamily}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'alphabetic';
     ctx.fillText(content, Math.floor(width / 2), padY + textAscent);
@@ -924,16 +924,18 @@ class TicketGenerator {
         .align('ct')
         .font('a')
         .lineSpace()
-        .size(1, 0)
-        .style('B');
+        .size(1, 0);
       if (hasCjkChars(saludoFinal)) {
+        printer.style('NORMAL');
         const greetingImage = renderGreetingRasterImage(saludoFinal);
         if (greetingImage) {
           printer.raster(greetingImage, 'normal');
         } else {
+          printer.style('B');
           printer.text(toCP850(`${saludoFallback}\n`));
         }
       } else {
+        printer.style('B');
         printer.text(toCP850(`${saludoFinal}\n`));
       }
       printer
