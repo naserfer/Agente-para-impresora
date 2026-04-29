@@ -133,6 +133,9 @@ ALLOWED_ORIGINS=${config.aplicacion.vercelUrl}
 # Logs
 LOG_LEVEL=${config.avanzado.logLevel}
 
+# Impresión de facturas
+ENABLE_INVOICE_PRINTING=${config.avanzado.enableInvoicePrinting ?? false}
+
 # Spool Windows (solo fast-path)
 WINDOWS_SPOOL_FAST_PATH=true
 WINDOWS_SPOOL_FAST_PATH_TIMEOUT_MS=1200
@@ -294,7 +297,7 @@ function buildInstaller(config) {
     success('Instalador generado correctamente');
 
     // Renombrar archivos con nombre del cliente
-    const distPath = path.join(__dirname, 'packages/desktop/dist-installer');
+    const distPath = path.join(__dirname, 'packages/desktop/dist-installer-unlock');
     if (fs.existsSync(distPath)) {
       const files = fs.readdirSync(distPath);
       files.forEach(file => {

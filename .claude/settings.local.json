@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git pull *)",
+      "Bash(node build-installer.js \"Oriental 8\")"
+    ]
+  }
+}

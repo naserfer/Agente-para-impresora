@@ -27,6 +27,7 @@
   "avanzado": {
     "puerto": 3001,
     "logLevel": "info",
-    "enableSupabaseListener": true
+    "enableSupabaseListener": true,
+    "enableInvoicePrinting": true
   }
 }
