@@ -117,6 +117,34 @@ test('resolveMesaNumeroByMesaId returns null when mesa_id is missing', async () 
   }
 });
 
+test('fetchKitchenItemsWithRetry requests notas_item from vista_items_ticket_cocina', async () => {
+  const originalSupabase = listener.supabase;
+  let selected = '';
+
+  try {
+    listener.supabase = {
+      from(table) {
+        assert.equal(table, 'vista_items_ticket_cocina');
+        return {
+          select(fields) {
+            selected = fields;
+            return this;
+          },
+          eq() { return this; },
+          async order() {
+            return { data: [], error: null };
+          }
+        };
+      }
+    };
+
+    await listener.fetchKitchenItemsWithRetry('pedido-1', null, { maxAttempts: 1 });
+    assert.ok(selected.includes('notas_item'));
+  } finally {
+    listener.supabase = originalSupabase;
+  }
+});
+
 test('initial emission with mesa_id runs kitchenOnly mode', async () => {
   const originalPrintOrder = listener.printOrder;
   const originalAgeCheck = listener.isAutomaticPrintBlockedByOrderAge;

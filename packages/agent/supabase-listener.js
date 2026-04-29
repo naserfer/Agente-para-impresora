@@ -151,7 +151,7 @@ class SupabaseRealtimeListener {
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       const { data: items, error: itemsError } = await this.supabase
         .from('vista_items_ticket_cocina')
-        .select('producto_nombre, cantidad, modificaciones')
+        .select('producto_nombre, cantidad, modificaciones, notas_item')
         .eq('pedido_id', pedidoId)
         .order('item_pedido_id', { ascending: true });
 
@@ -174,7 +174,11 @@ class SupabaseRealtimeListener {
       // Si existen filas pero todas vienen sin modificaciones, es el caso que queremos esperar.
       const hasRows = lastItems.length > 0;
       const allModificationsEmpty = hasRows
-        ? lastItems.every((it) => !it.modificaciones || String(it.modificaciones).trim().length === 0)
+        ? lastItems.every((it) => {
+          const mod = String(it.modificaciones || '').trim();
+          const note = String(it.notas_item || '').trim();
+          return mod.length === 0 && note.length === 0;
+        })
         : true;
 
       if (hasRows && !allModificationsEmpty) {
@@ -1546,8 +1550,9 @@ class SupabaseRealtimeListener {
         items: (items || []).map(item => ({
           name: item.producto_nombre || item.nombre || 'Producto',
           quantity: item.cantidad || 1,
-          notes: item.modificaciones || null,
-          modificaciones: item.modificaciones || null
+          notes: item.modificaciones || item.notas_item || null,
+          modificaciones: item.modificaciones ?? null,
+          notasItem: item.notas_item ?? null
         }))
       };
     } catch (error) {

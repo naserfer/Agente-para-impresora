@@ -1,5 +1,6 @@
 const escpos = require('escpos');
 const iconv = require('iconv-lite');
+const { createCanvas } = require('@napi-rs/canvas');
 
 // Eliminar acentos para evitar caracteres raros en impresoras
 function stripAccents(str) {
@@ -21,6 +22,51 @@ function toCP850(str) {
   } catch (e) {
     console.warn('Error al convertir a CP850:', e);
     return plain;
+  }
+}
+
+function hasCjkChars(str) {
+  if (str == null) return false;
+  return /[\u3400-\u9FFF\uF900-\uFAFF]/u.test(String(str));
+}
+
+function renderGreetingRasterImage(text) {
+  const content = String(text == null ? '' : text).trim();
+  if (!content) return null;
+  try {
+    const fontSizePx = 46;
+    const padX = 26;
+    const padY = 16;
+    const fontFamily = '"Microsoft YaHei", "SimHei", "Noto Sans CJK SC", sans-serif';
+
+    const probe = createCanvas(1, 1);
+    const probeCtx = probe.getContext('2d');
+    probeCtx.font = `700 ${fontSizePx}px ${fontFamily}`;
+    const metrics = probeCtx.measureText(content);
+    const textWidth = Math.max(1, Math.ceil(metrics.width || content.length * fontSizePx));
+    const textAscent = Math.ceil(metrics.actualBoundingBoxAscent || fontSizePx);
+    const textDescent = Math.ceil(metrics.actualBoundingBoxDescent || Math.floor(fontSizePx * 0.35));
+    const textHeight = textAscent + textDescent;
+
+    const width = textWidth + padX * 2;
+    const height = textHeight + padY * 2;
+    const canvas = createCanvas(width, height);
+    const ctx = canvas.getContext('2d');
+
+    ctx.fillStyle = '#FFFFFF';
+    ctx.fillRect(0, 0, width, height);
+    ctx.fillStyle = '#000000';
+    ctx.font = `700 ${fontSizePx}px ${fontFamily}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'alphabetic';
+    ctx.fillText(content, Math.floor(width / 2), padY + textAscent);
+
+    const imageData = ctx.getImageData(0, 0, width, height);
+    const pixels = { data: Buffer.from(imageData.data), shape: [width, height, 4] };
+    return new escpos.Image(pixels);
+  } catch (err) {
+    console.warn('No se pudo renderizar saludo en raster:', err?.message || err);
+    return null;
   }
 }
 
@@ -49,6 +95,38 @@ function splitModificaciones(raw) {
     .split(/\s*[|,]\s*/)
     .map((part) => part.trim())
     .filter((part) => part.length > 0);
+}
+
+function normalizeTextForDedupe(raw) {
+  if (raw == null) return '';
+  return stripAccents(String(raw))
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function buildDedupedItemNotes(item = {}) {
+  const rawSources = [
+    item.modificaciones,
+    item.notasItem,
+    item.personalizaciones,
+    item.notes
+  ];
+  const seen = new Set();
+  const output = [];
+
+  for (const source of rawSources) {
+    const parts = splitModificaciones(source);
+    for (const part of parts) {
+      const formatted = formatModifExtraAmounts(part);
+      const key = normalizeTextForDedupe(formatted);
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      output.push(formatted);
+    }
+  }
+
+  return output;
 }
 
 /** Corta por espacios para que la impresora no parta palabras a mitad de línea. */
@@ -229,7 +307,6 @@ class TicketGenerator {
     const WRAP_ITEM = 24;
     const WRAP_MODIF = 24;
     const WRAP_NOTES = 24;
-    const MOD_LABEL = '   Modif:\n';
     const MOD_BULLET = '   - ';
     const MOD_CONT = '     ';
     /** true = mismo modo que BODY (1,0), ~24 caracteres = ancho útil 80 mm */
@@ -368,13 +445,12 @@ class TicketGenerator {
         printer.style('NORMAL');
 
         // Modificaciones: mismo tamaño grande (font A), cortes solo entre palabras
-        const modificacionesRaw = item.modificaciones || item.personalizaciones || item.notasItem || item.notes;
-        const modifList = splitModificaciones(modificacionesRaw);
+        const modifList = buildDedupedItemNotes(item);
         if (modifList.length > 0) {
-          printer.font('a').size(BODY_W, BODY_H).text(toCP850(MOD_LABEL));
+          printer.font('a').size(BODY_W, BODY_H);
           const innerW = WRAP_MODIF - MOD_BULLET.length;
           modifList.forEach((mod) => {
-            const wrapped = wrapWords(formatModifExtraAmounts(mod), innerW);
+            const wrapped = wrapWords(mod, innerW);
             wrapped.forEach((part, idx) => {
               const prefix = idx === 0 ? MOD_BULLET : MOD_CONT;
               printer.text(toCP850(`${prefix}${part}\n`));
@@ -695,28 +771,24 @@ class TicketGenerator {
       }
     };
 
-    const numeroFactura = factura.numero_factura || '';
-    const timbrado = factura.timbrado || '';
-    const vigInicio = formatearFechaHora(factura.timbrado_vigencia_inicio).split(' ')[0];
-    const vigFin = formatearFechaHora(factura.timbrado_vigencia_fin).split(' ')[0];
     const fechaEmision = formatearFechaHora(factura.fecha_emision);
 
-    const totalIva10 = Number(factura.total_iva_10 || 0);
-    const totalIva5 = Number(factura.total_iva_5 || 0);
-    const totalExento = Number(factura.total_exento || 0);
     const totalAPagar = Number(factura.total_a_pagar || 0);
-    const totalIva = totalIva10 + totalIva5;
     const totalLetras = factura.total_letras || '';
     const PY_COLS = 48;
     const numeroPedido =
       factura.numero_pedido != null && String(factura.numero_pedido).trim() !== ''
         ? String(factura.numero_pedido).trim()
         : null;
-    const qrMarcaUrl =
-      (factura.qr_marca_url && String(factura.qr_marca_url).trim()) ||
-      (factura.qr_url && String(factura.qr_url).trim()) ||
-      (process.env.KARUBOX_QR_URL && String(process.env.KARUBOX_QR_URL).trim()) ||
-      'https://KaruBox.com.py';
+    const mesaNumero =
+      factura.mesa_numero != null && String(factura.mesa_numero).trim() !== ''
+        ? String(factura.mesa_numero).trim()
+        : null;
+    const saludoFallback = '¡Gracias por tu compra!';
+    const saludoFinal =
+      factura.saludo_final != null && String(factura.saludo_final).trim() !== ''
+        ? String(factura.saludo_final).trim()
+        : saludoFallback;
 
     device.open(() => {
       const esc = Buffer.from([0x1B, 0x74, 0x01]); // CP850
@@ -738,6 +810,18 @@ class TicketGenerator {
         .style('NORMAL')
         .size(0, 0);
 
+      if (mesaNumero) {
+        printer
+          .feed(1)
+          .align('ct')
+          .font('a')
+          .size(2, 2)
+          .style('B')
+          .text(toCP850(`Mesa #${mesaNumero}\n`))
+          .style('NORMAL')
+          .size(0, 0);
+      }
+
       if (factura.emisor_direccion) {
         wrapWords(String(factura.emisor_direccion), PY_COLS).forEach((ln) => {
           printer.text(toCP850(`${ln}\n`));
@@ -755,15 +839,6 @@ class TicketGenerator {
       }
 
       emitSep('=');
-      wrapWords(`TIMBRADO Nº ${timbrado}`, PY_COLS).forEach((ln) => {
-        printer.text(toCP850(`${ln}\n`));
-      });
-      wrapWords(`Vigencia: ${vigInicio} al ${vigFin}`, PY_COLS).forEach((ln) => {
-        printer.text(toCP850(`${ln}\n`));
-      });
-      wrapWords(`Factura Nro: ${numeroFactura}`, PY_COLS).forEach((ln) => {
-        printer.text(toCP850(`${ln}\n`));
-      });
       wrapWords(`Fecha: ${fechaEmision}`, PY_COLS).forEach((ln) => {
         printer.text(toCP850(`${ln}\n`));
       });
@@ -772,9 +847,6 @@ class TicketGenerator {
           printer.text(toCP850(`${ln}\n`));
         });
       }
-      wrapWords('Condición de Venta: Contado', PY_COLS).forEach((ln) => {
-        printer.text(toCP850(`${ln}\n`));
-      });
       emitSep('-');
 
       const docIdent = factura.receptor_ruc || factura.receptor_ci || '';
@@ -807,33 +879,37 @@ class TicketGenerator {
         const nombre = it.producto_nombre || 'Producto';
         const precio = Number(it.precio_unitario || 0);
         const subtotal = Number(it.subtotal || 0);
-        const ivaPorc = it.iva_porcentaje != null ? `${it.iva_porcentaje}%` : '';
+        const itemSubtotal = subtotal > 0 ? subtotal : precio * cant;
 
         const itemHead = `${cant}  `;
-        const sangriaPrecio = ' '.repeat(itemHead.length);
+        const sangriaPrecio = ' '.repeat(itemHead.length + 2);
+        const detalleMonto = cant > 1
+          ? `${cant} x ${precio.toLocaleString('es-PY')} = ${itemSubtotal.toLocaleString('es-PY')}`
+          : `${itemSubtotal.toLocaleString('es-PY')}`;
+
+        printer.font('a').size(0, 0).style('B');
         wrapCantSpaceNombreLine(cant, nombre, PY_COLS).forEach((ln) => {
           printer.text(toCP850(`${ln}\n`));
         });
-        const precioStr = subtotal.toLocaleString('es-PY');
-        const precioDetalle = `${precio.toLocaleString('es-PY')}   ${precioStr}   (${ivaPorc})`;
-        const innerPrecio = Math.max(8, PY_COLS - itemHead.length);
-        wrapWords(precioDetalle, innerPrecio).forEach((part) => {
+        printer.style('NORMAL');
+        const innerPrecio = Math.max(8, PY_COLS - sangriaPrecio.length);
+        wrapWords(detalleMonto, innerPrecio).forEach((part) => {
           printer.text(toCP850(`${sangriaPrecio}${part}\n`));
         });
+        printer.size(0, 0);
       });
 
       emitSep('=');
 
       // Totales
       printer
-        .align('rt')
-        .text(toCP850(`Exentas: Gs. ${totalExento.toLocaleString('es-PY')}\n`))
-        .text(toCP850(`IVA 5% : Gs. ${totalIva5.toLocaleString('es-PY')}\n`))
-        .text(toCP850(`IVA 10%: Gs. ${totalIva10.toLocaleString('es-PY')}\n`))
-        .text(toCP850(`Total IVA: Gs. ${totalIva.toLocaleString('es-PY')}\n`))
+        .align('ct')
+        .size(1, 0)
         .style('B')
-        .text(toCP850(`TOTAL A PAGAR: Gs. ${totalAPagar.toLocaleString('es-PY')}\n`))
+        .text(toCP850('TOTAL A PAGAR\n'))
+        .text(toCP850(`Gs. ${totalAPagar.toLocaleString('es-PY')}\n`))
         .style('NORMAL')
+        .size(0, 0)
         .align('lt');
 
       if (totalLetras) {
@@ -844,20 +920,26 @@ class TicketGenerator {
       }
 
       printer
-        .feed(4)
+        .feed(2)
         .align('ct')
         .font('a')
         .lineSpace()
         .size(1, 0)
-        .style('B')
-        .text(toCP850('KaruBox.com.py\n'))
+        .style('B');
+      if (hasCjkChars(saludoFinal)) {
+        const greetingImage = renderGreetingRasterImage(saludoFinal);
+        if (greetingImage) {
+          printer.raster(greetingImage, 'normal');
+        } else {
+          printer.text(toCP850(`${saludoFallback}\n`));
+        }
+      } else {
+        printer.text(toCP850(`${saludoFinal}\n`));
+      }
+      printer
         .style('NORMAL')
         .size(0, 0)
         .align('ct');
-      const qrBuf = buildEpsonQrCodePayload(qrMarcaUrl, 5);
-      if (qrBuf.length > 0) {
-        printer.raw(qrBuf);
-      }
       printer.feed(1).align('lt');
       resetInvoiceLayout(printer);
       printer.feed(1).cut().close();
