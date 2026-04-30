@@ -85,6 +85,20 @@ test('generateKitchenTicket dedupes repeated text between modificaciones and not
   assert.equal(matches.length, 1);
 });
 
+test('generateKitchenTicket wraps restaurant name by words to avoid mid-word splits', () => {
+  const buffer = TicketGenerator.generateKitchenTicket({
+    lomiteriaName: 'Restaurante oriental 8',
+    orderId: '900',
+    createdAt: '2026-04-30T05:00:00.000Z',
+    items: [{ name: 'Lomo', quantity: 1 }]
+  });
+
+  const ticketText = buffer.toString('latin1');
+  assert.ok(ticketText.includes('Restaurante'));
+  assert.ok(ticketText.includes('oriental 8'));
+  assert.equal(ticketText.includes('orie\nntal'), false);
+});
+
 test('generateParaguayInvoice omits fiscal labels and QR footer in non-fiscal mode', () => {
   const buffer = TicketGenerator.generateParaguayInvoice({
     emisor_razon_social: 'Oriental 8',
@@ -202,4 +216,27 @@ test('generateParaguayInvoice prints total in two fixed lines to avoid printer w
   assert.ok(ticket.includes('TOTAL A PAGAR'));
   assert.ok(ticket.includes('Gs. 95.000'));
   assert.equal(ticket.includes('TOTAL A PAGAR: Gs.'), false);
+});
+
+test('generateParaguayInvoice prints payment method for efectivo and tarjeta', () => {
+  const efectivoTicket = TicketGenerator.generateParaguayInvoice({
+    emisor_razon_social: 'Oriental 8',
+    fecha_emision: '2026-04-30T01:00:00.000Z',
+    numero_pedido: '908',
+    total_a_pagar: 20000,
+    metodo_cobro: 'efectivo',
+    detalle: [{ cantidad: 1, producto_nombre: 'Arroz', precio_unitario: 20000, subtotal: 20000 }]
+  }).toString('latin1');
+
+  const tarjetaTicket = TicketGenerator.generateParaguayInvoice({
+    emisor_razon_social: 'Oriental 8',
+    fecha_emision: '2026-04-30T01:00:00.000Z',
+    numero_pedido: '909',
+    total_a_pagar: 20000,
+    metodo_cobro: 'tarjeta',
+    detalle: [{ cantidad: 1, producto_nombre: 'Arroz', precio_unitario: 20000, subtotal: 20000 }]
+  }).toString('latin1');
+
+  assert.ok(efectivoTicket.includes('Cobro: Efectivo'));
+  assert.ok(tarjetaTicket.includes('Cobro: Tarjeta'));
 });

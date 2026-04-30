@@ -327,9 +327,10 @@ class TicketGenerator {
         .encode('CP850')
         .font('a')
         .align('ct')
-        .size(2, 2)
+        .size(1, 1)
         .style('B')
-        .text(toCP850(`${lomiteriaName}\n`))
+        .text(toCP850(`${lomiteriaName}\n`));
+      printer
         .style('NORMAL')
         .size(0, 0);
 
@@ -338,7 +339,7 @@ class TicketGenerator {
       // ========================================
       printer
         .align('ct')
-        .size(2, 1)
+        .size(1, 0)
         .style('B')
         .text(toCP850(`#${orderData.orderId || orderData.numeroPedido || 'N/A'}\n`))
         .style('NORMAL')
@@ -348,7 +349,7 @@ class TicketGenerator {
       if (mesaNumero != null && String(mesaNumero).trim() !== '') {
         printer
           .align('ct')
-          .size(1, 1)
+          .size(2, 2)
           .style('B')
           .text(toCP850(`Mesa #${String(mesaNumero).trim()}\n`))
           .style('NORMAL')
@@ -374,7 +375,7 @@ class TicketGenerator {
 
       printer
         .align('ct')
-        .size(2, 1)
+        .size(1, 0)
         .style('B')
         .text(toCP850(`[ ${tipoPedido} ]\n`))
         .style('NORMAL')
@@ -775,6 +776,14 @@ class TicketGenerator {
 
     const totalAPagar = Number(factura.total_a_pagar || 0);
     const totalLetras = factura.total_letras || '';
+    const metodoCobroRaw = String(factura.metodo_cobro || '').trim();
+    const metodoCobroLower = metodoCobroRaw.toLowerCase();
+    let metodoCobroLabel = '';
+    if (metodoCobroLower === 'efectivo') {
+      metodoCobroLabel = 'Efectivo';
+    } else if (metodoCobroLower === 'tarjeta') {
+      metodoCobroLabel = 'Tarjeta';
+    }
     const PY_COLS = 48;
     const numeroPedido =
       factura.numero_pedido != null && String(factura.numero_pedido).trim() !== ''
@@ -844,6 +853,11 @@ class TicketGenerator {
       });
       if (numeroPedido) {
         wrapWords(`Pedido Nº: ${numeroPedido}`, PY_COLS).forEach((ln) => {
+          printer.text(toCP850(`${ln}\n`));
+        });
+      }
+      if (metodoCobroLabel) {
+        wrapWords(`Cobro: ${metodoCobroLabel}`, PY_COLS).forEach((ln) => {
           printer.text(toCP850(`${ln}\n`));
         });
       }
