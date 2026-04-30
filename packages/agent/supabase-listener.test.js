@@ -57,6 +57,21 @@ test('customer points for sale prefers explicit puntos_generados', () => {
   assert.equal(listener.getCustomerWelcomePointsForSale({}), 0);
 });
 
+test('Oriental 8 no-mesa flow detection is tenant-specific', () => {
+  assert.equal(
+    listener.isOriental8NoMesaFlow({ tenant_id: '565c0876-2235-4e7c-bb54-89c466fe4583', mesa_id: null }),
+    true
+  );
+  assert.equal(
+    listener.isOriental8NoMesaFlow({ tenant_id: '565c0876-2235-4e7c-bb54-89c466fe4583', mesa_id: 'mesa-1' }),
+    false
+  );
+  assert.equal(
+    listener.isOriental8NoMesaFlow({ tenant_id: 'otro-tenant', mesa_id: null }),
+    false
+  );
+});
+
 test('resolveMesaNumeroByMesaId returns mesa number when mesa_id exists', async () => {
   const originalSupabase = listener.supabase;
   const seen = { table: null, filters: {} };

@@ -240,3 +240,62 @@ test('generateParaguayInvoice prints payment method for efectivo and tarjeta', (
   assert.ok(efectivoTicket.includes('Cobro: Efectivo'));
   assert.ok(tarjetaTicket.includes('Cobro: Tarjeta'));
 });
+
+test('generateParaguayInvoice moves extra note below product without Extra/Nota labels', () => {
+  const ticket = TicketGenerator.generateParaguayInvoice({
+    emisor_razon_social: 'Oriental 8',
+    fecha_emision: '2026-04-30T01:00:00.000Z',
+    numero_pedido: '910',
+    total_a_pagar: 15000,
+    detalle: [{
+      cantidad: 1,
+      producto_nombre: 'Arroz blanco (Extra: Nota: extra panceta Gs. 5.000)',
+      precio_unitario: 15000,
+      subtotal: 15000
+    }]
+  }).toString('latin1');
+
+  const normalized = ticket.toLowerCase();
+  assert.ok(normalized.includes('arroz blanco'));
+  assert.ok(normalized.includes('panceta gs. 5.000'));
+  assert.equal(normalized.includes('extra: nota:'), false);
+});
+
+test('generateParaguayInvoice prints base price first and extra price below', () => {
+  const ticket = TicketGenerator.generateParaguayInvoice({
+    emisor_razon_social: 'Oriental 8',
+    fecha_emision: '2026-04-30T01:00:00.000Z',
+    numero_pedido: '911',
+    total_a_pagar: 15000,
+    detalle: [{
+      cantidad: 1,
+      producto_nombre: 'Arroz blanco (Extra: panceta Gs. 5.000)',
+      precio_unitario: 15000,
+      subtotal: 15000
+    }]
+  }).toString('latin1');
+
+  assert.ok(ticket.includes('Arroz blanco'));
+  assert.ok(ticket.includes('Gs. 15.000'));
+  assert.ok(ticket.includes('+ panceta Gs. 5.000'));
+  assert.equal(ticket.includes('Plato:'), false);
+  assert.equal(ticket.includes('Total ítem:'), false);
+});
+
+test('generateParaguayInvoice normalizes extra amount with dot thousands separator', () => {
+  const ticket = TicketGenerator.generateParaguayInvoice({
+    emisor_razon_social: 'Oriental 8',
+    fecha_emision: '2026-04-30T01:00:00.000Z',
+    numero_pedido: '912',
+    total_a_pagar: 15000,
+    detalle: [{
+      cantidad: 1,
+      producto_nombre: 'Arroz blanco (Extra: panceta Gs. 5,000)',
+      precio_unitario: 15000,
+      subtotal: 15000
+    }]
+  }).toString('latin1');
+
+  assert.ok(ticket.includes('+ panceta Gs. 5.000'));
+  assert.equal(ticket.includes('Gs. 5,000'), false);
+});

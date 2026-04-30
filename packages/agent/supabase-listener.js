@@ -69,6 +69,7 @@ class SupabaseRealtimeListener {
     this.lastRealtimeDowntimeMs = null;
     this.pollingAnomalyCount = 0;
     this.lastPollingAnomalyAt = null;
+    this.oriental8TenantId = '565c0876-2235-4e7c-bb54-89c466fe4583';
   }
 
   async sleep(ms) {
@@ -346,6 +347,12 @@ class SupabaseRealtimeListener {
   shouldUseAsyncInvoice(options = {}) {
     const { kitchenOnly = false, invoiceOnly = false } = options;
     return !kitchenOnly && !invoiceOnly;
+  }
+
+  isOriental8NoMesaFlow(order = {}) {
+    const tenantId = order?.tenant_id || order?.lomiteria_id || order?.tenantId || null;
+    const hasMesa = order?.mesa_id != null && String(order.mesa_id).trim() !== '';
+    return tenantId === this.oriental8TenantId && !hasMesa;
   }
 
   startKeepAliveLoop() {
@@ -1133,12 +1140,13 @@ class SupabaseRealtimeListener {
           ? 2
           : Math.max(1, parseInt(String(rawCopias), 10) || 2))
         : 1;
+      const finalCopiasFactura = this.isOriental8NoMesaFlow(order) ? 1 : copiasFactura;
       logger.info(
-        `[Factura] Pedido #${num}: factura encontrada, imprimiendo ${copiasFactura} copia(s)`,
+        `[Factura] Pedido #${num}: factura encontrada, imprimiendo ${finalCopiasFactura} copia(s)`,
         { service: 'supabase-listener' }
       );
 
-      for (let c = 0; c < copiasFactura; c++) {
+      for (let c = 0; c < finalCopiasFactura; c++) {
         const spoolStart = performance.now();
         await this.emitTraceEvent({
           correlationId,
@@ -1148,7 +1156,7 @@ class SupabaseRealtimeListener {
             ticket: 'factura',
             printer_id: printerId,
             printer_name: printerName,
-            copies: copiasFactura,
+            copies: finalCopiasFactura,
             copy_index: c + 1,
             payload_size: facturaBuffer.length
           }
@@ -1163,7 +1171,7 @@ class SupabaseRealtimeListener {
             ticket: 'factura',
             printer_id: printerId,
             printer_name: printerName,
-            copies: copiasFactura,
+            copies: finalCopiasFactura,
             copy_index: c + 1,
             payload_size: facturaBuffer.length,
             spool_ms: spoolMs
@@ -1172,7 +1180,7 @@ class SupabaseRealtimeListener {
       }
       const printMs = Math.round(performance.now() - lookupStartedAt) - lookupMs;
       logger.info(
-        `[Timing] Pedido #${num}: factura_lookup_ms=${lookupMs} attempts=${facturaLookup.attempts || 0} factura_print_ms=${printMs} copias=${copiasFactura}`,
+        `[Timing] Pedido #${num}: factura_lookup_ms=${lookupMs} attempts=${facturaLookup.attempts || 0} factura_print_ms=${printMs} copias=${finalCopiasFactura}`,
         { service: 'supabase-listener' }
       );
     } catch (factEx) {
@@ -1315,7 +1323,7 @@ class SupabaseRealtimeListener {
         });
       }
 
-      if (!invoiceOnly && !kitchenOnly && !reprintSolicitudId && this.isCustomerWelcomeTicketEnabled()) {
+      if (!invoiceOnly && !kitchenOnly && !reprintSolicitudId && this.isCustomerWelcomeTicketEnabled() && !this.isOriental8NoMesaFlow(order)) {
         try {
           const customerTicketStart = performance.now();
           const welcomeData = {

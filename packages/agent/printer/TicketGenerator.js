@@ -189,6 +189,58 @@ function wrapCantSpaceNombreLine(cant, nombre, maxChars) {
   return out;
 }
 
+function parseInvoiceItemDisplay(rawName) {
+  const original = String(rawName || '').trim() || 'Producto';
+  const extraNotes = [];
+  const parseGuaraniAmount = (text) => {
+    const match = String(text || '').match(/gs\.?\s*([\d\.\,]+)/i);
+    if (!match) return null;
+    const raw = String(match[1] || '')
+      .replace(/\./g, '')
+      .replace(/,/g, '')
+      .trim();
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  };
+
+  const baseName = original
+    .replace(/\(([^)]*)\)/g, (_, inner) => {
+      const source = String(inner || '').trim();
+      if (!source) return '';
+      let note = source
+        .replace(/^extra\s*:\s*/i, '')
+        .replace(/^nota\s*:\s*/i, '')
+        .replace(/^extra\s+/i, '')
+        .replace(/^nota\s+/i, '')
+        .replace(/^\s*[:\-]\s*/, '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (note) {
+        extraNotes.push({
+          text: note,
+          amount: parseGuaraniAmount(note)
+        });
+      }
+      return '';
+    })
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const dedupedNotes = [];
+  const seen = new Set();
+  for (const note of extraNotes) {
+    const key = String(note.text || '').toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    dedupedNotes.push(note);
+  }
+
+  return {
+    name: baseName || original,
+    extraNotes: dedupedNotes
+  };
+}
+
 /** Separador ~80 mm: Font A normal ≈48 cols; con doble ancho ESC/POS (p. ej. size 1,0) ≈24 cols. */
 function kitchenSepFull(char, doubleWidthMode) {
   const c = String(char || '-').charAt(0);
@@ -852,7 +904,7 @@ class TicketGenerator {
         printer.text(toCP850(`${ln}\n`));
       });
       if (numeroPedido) {
-        wrapWords(`Pedido Nº: ${numeroPedido}`, PY_COLS).forEach((ln) => {
+        wrapWords(`Pedido Nro: ${numeroPedido}`, PY_COLS).forEach((ln) => {
           printer.text(toCP850(`${ln}\n`));
         });
       }
@@ -890,26 +942,49 @@ class TicketGenerator {
 
       items.forEach((it) => {
         const cant = Number(it.cantidad || 1);
-        const nombre = it.producto_nombre || 'Producto';
+        const parsedItem = parseInvoiceItemDisplay(it.producto_nombre || 'Producto');
+        const nombre = parsedItem.name || 'Producto';
         const precio = Number(it.precio_unitario || 0);
         const subtotal = Number(it.subtotal || 0);
         const itemSubtotal = subtotal > 0 ? subtotal : precio * cant;
+        const extraTotalPerUnit = parsedItem.extraNotes
+          .map((n) => Number(n.amount || 0))
+          .reduce((acc, n) => acc + n, 0);
+        const platoPrecioUnit = Math.max(0, precio - extraTotalPerUnit);
 
         const itemHead = `${cant}  `;
         const sangriaPrecio = ' '.repeat(itemHead.length + 2);
-        const detalleMonto = cant > 1
-          ? `${cant} x ${precio.toLocaleString('es-PY')} = ${itemSubtotal.toLocaleString('es-PY')}`
-          : `${itemSubtotal.toLocaleString('es-PY')}`;
+        const nombreConPrecio = `${nombre}  Gs. ${precio.toLocaleString('es-PY')}`;
 
         printer.font('a').size(0, 0).style('B');
-        wrapCantSpaceNombreLine(cant, nombre, PY_COLS).forEach((ln) => {
+        wrapCantSpaceNombreLine(cant, nombreConPrecio, PY_COLS).forEach((ln) => {
           printer.text(toCP850(`${ln}\n`));
         });
         printer.style('NORMAL');
-        const innerPrecio = Math.max(8, PY_COLS - sangriaPrecio.length);
-        wrapWords(detalleMonto, innerPrecio).forEach((part) => {
-          printer.text(toCP850(`${sangriaPrecio}${part}\n`));
-        });
+        if (parsedItem.extraNotes.length > 0) {
+          const notePrefix = '    + ';
+          const noteCont = '      ';
+          const noteWidth = Math.max(8, PY_COLS - notePrefix.length);
+          parsedItem.extraNotes.forEach((note) => {
+            let noteText = String(note.text || '').trim();
+            if (Number.isFinite(note.amount)) {
+              noteText = noteText.replace(
+                /gs\.?\s*[\d\.\,]+/i,
+                `Gs. ${Number(note.amount).toLocaleString('es-PY')}`
+              );
+            }
+            wrapWords(noteText, noteWidth).forEach((part, idx) => {
+              printer.text(toCP850(`${idx === 0 ? notePrefix : noteCont}${part}\n`));
+            });
+          });
+        }
+        if (cant > 1 && itemSubtotal > 0) {
+          const innerPrecio = Math.max(8, PY_COLS - sangriaPrecio.length);
+          const detalleCantidad = `${cant} x ${precio.toLocaleString('es-PY')} = ${itemSubtotal.toLocaleString('es-PY')}`;
+          wrapWords(detalleCantidad, innerPrecio).forEach((part) => {
+            printer.text(toCP850(`${sangriaPrecio}${part}\n`));
+          });
+        }
         printer.size(0, 0);
       });
 
