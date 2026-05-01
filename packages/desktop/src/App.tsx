@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Printer, Activity, FileText, RotateCcw, Code, User } from 'lucide-react';
+import { Printer, Activity, FileText, RotateCcw, Code, User, Settings } from 'lucide-react';
 import PrinterConfig from './components/PrinterConfig';
 import StatusPanel from './components/StatusPanel';
 import LogsViewer from './components/LogsViewer';
@@ -18,6 +18,8 @@ function App() {
     return savedMode || 'client';
   });
   const [isConfigLocked, setIsConfigLocked] = useState(false); // .exe: cliente no puede cambiar config
+  /** Si ya hay config completa (o el wizard terminó), se puede cerrar el asistente sin guardar. */
+  const [canDismissWizard, setCanDismissWizard] = useState(false);
   const [agentStatus, setAgentStatus] = useState<{ running: boolean; health: any }>({ 
     running: false, 
     health: null 
@@ -38,6 +40,7 @@ function App() {
     window.electronAPI.getEnvConfig().then((res) => {
       if (!res.success || !res.data?.SUPABASE_URL) {
         localStorage.removeItem('setup_completed');
+        setCanDismissWizard(false);
         setShowWizard(true);
         return;
       }
@@ -50,6 +53,7 @@ function App() {
 
       if (missingLocalConfig) {
         localStorage.removeItem('setup_completed');
+        setCanDismissWizard(false);
         setShowWizard(true);
       } else {
         // Mantener localStorage sincronizado para UI (pero la decisión del wizard no depende de localStorage)
@@ -57,6 +61,7 @@ function App() {
         localStorage.setItem('business_name', clientName);
         localStorage.setItem('printer_id', printerId);
         localStorage.setItem('printer_name', printerName);
+        setCanDismissWizard(true);
         setShowWizard(false);
       }
     });
@@ -148,7 +153,13 @@ function App() {
 
   const handleWizardComplete = (config: any) => {
     console.log('Wizard completado con configuración:', config);
+    setCanDismissWizard(true);
     setShowWizard(false);
+  };
+
+  const openConfigurationWizard = () => {
+    setWizardKey((k) => k + 1);
+    setShowWizard(true);
   };
 
   const handleResetConfig = async () => {
@@ -162,7 +173,8 @@ function App() {
         if (result.success) {
           // Limpiar localStorage
           localStorage.clear();
-          
+          setCanDismissWizard(false);
+
           // Forzar remount del wizard cambiando la key
           setWizardKey(prev => prev + 1);
           
@@ -185,7 +197,11 @@ function App() {
   if (showWizard) {
     return (
       <div className="h-screen w-full min-h-0 overflow-hidden flex flex-col bg-slate-100">
-        <SetupWizard key={wizardKey} onComplete={handleWizardComplete} />
+        <SetupWizard
+          key={wizardKey}
+          onComplete={handleWizardComplete}
+          onDismiss={canDismissWizard ? () => setShowWizard(false) : undefined}
+        />
       </div>
     );
   }
@@ -227,6 +243,16 @@ function App() {
                   )}
                 </button>
               )}
+
+              <button
+                type="button"
+                onClick={openConfigurationWizard}
+                className="flex items-center space-x-2 px-3 py-1.5 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-md hover:bg-slate-50 transition-colors"
+                title="Nombre del negocio, impresora y Printer ID (asistente)"
+              >
+                <Settings className="h-4 w-4" />
+                <span className="hidden sm:inline">Configuración</span>
+              </button>
 
               {(() => {
                 // Misma lógica que en StatusPanel

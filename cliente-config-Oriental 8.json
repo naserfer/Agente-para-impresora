@@ -1,7 +1,8 @@
 {
   "cliente": {
-    "nombre": "Oriental 8",
+    "nombre": "Restaurante Oriental 8",
     "slug": "oriental-8",
+    "tenantId": "565c0876-2235-4e7c-bb54-89c466fe4583",
     "ruc": "",
     "telefono": "",
     "email": "",
@@ -28,6 +29,7 @@
     "puerto": 3001,
     "logLevel": "info",
     "enableSupabaseListener": true,
-    "enableInvoicePrinting": true
+    "enableInvoicePrinting": true,
+    "agentTenantIds": "565c0876-2235-4e7c-bb54-89c466fe4583"
   }
 }

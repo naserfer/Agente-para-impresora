@@ -31,6 +31,7 @@ const logger = require('./logger');
 const printerManager = require('./printer/PrinterManager');
 const TicketGenerator = require('./printer/TicketGenerator');
 const { createCorrelationId, logPrintTrace } = require('./print-trace');
+const { isTenantInAgentScope, isPrinterIdInAgentScope } = require('./agent-scope');
 
 class SupabaseRealtimeListener {
   constructor() {
@@ -69,6 +70,7 @@ class SupabaseRealtimeListener {
     this.lastRealtimeDowntimeMs = null;
     this.pollingAnomalyCount = 0;
     this.lastPollingAnomalyAt = null;
+    /** UUID tenant Restaurante Oriental 8 (flujo ticket cliente sin mesa). */
     this.oriental8TenantId = '565c0876-2235-4e7c-bb54-89c466fe4583';
   }
 
@@ -626,13 +628,9 @@ class SupabaseRealtimeListener {
     if (process.env.ENABLE_REPRINT_SOLICITUD === 'false') return;
     if (!row?.id) return;
 
-    const allowed = process.env.AGENT_TENANT_IDS;
-    if (allowed && allowed.trim()) {
-      const list = allowed.split(',').map((s) => s.trim()).filter(Boolean);
-      if (list.length && !list.includes(row.tenant_id)) {
-        logger.debug(`[Reprint] Ignorado (tenant no en AGENT_TENANT_IDS): ${row.tenant_id}`, { service: 'supabase-listener' });
-        return;
-      }
+    if (!isTenantInAgentScope(row.tenant_id)) {
+      logger.debug(`[Reprint] Ignorado (tenant fuera de alcance del agente): ${row.tenant_id}`, { service: 'supabase-listener' });
+      return;
     }
 
     if (this.processedReprintIds.has(row.id)) {
@@ -821,13 +819,9 @@ class SupabaseRealtimeListener {
       }
     }
 
-    const allowed = process.env.AGENT_TENANT_IDS;
-    if (allowed && allowed.trim()) {
-      const list = allowed.split(',').map((s) => s.trim()).filter(Boolean);
-      if (list.length && !list.includes(row.tenant_id)) {
-        logger.debug(`[Factura bump] Ignorado (tenant no en AGENT_TENANT_IDS): ${row.tenant_id}`, { service: 'supabase-listener' });
-        return;
-      }
+    if (!isTenantInAgentScope(row.tenant_id)) {
+      logger.debug(`[Factura bump] Ignorado (tenant fuera de alcance del agente): ${row.tenant_id}`, { service: 'supabase-listener' });
+      return;
     }
 
     const ts = row.updated_at || row.created_at || '';
@@ -960,6 +954,11 @@ class SupabaseRealtimeListener {
       if (!rows?.length) return;
       for (const order of rows) {
         if (this.initialEmissionPrintedPedidoIds.has(order.id)) continue;
+        const tid = order.tenant_id || order.lomiteria_id;
+        if (!isTenantInAgentScope(tid)) {
+          logger.debug(`[Polling] Pedido ${order.id}: ignorado (tenant fuera de alcance del agente)`, { service: 'supabase-listener' });
+          continue;
+        }
         logger.info(`[Polling] Pedido FACT #${order.id} → imprimiendo`, { service: 'supabase-listener' });
         const correlationId = createCorrelationId();
         await this.emitTraceEvent({
@@ -1017,14 +1016,10 @@ class SupabaseRealtimeListener {
           }
         }
 
-        const allowed = process.env.AGENT_TENANT_IDS;
-        if (allowed && allowed.trim()) {
-          const list = allowed.split(',').map((s) => s.trim()).filter(Boolean);
-          const tid = order.tenant_id || order.lomiteria_id;
-          if (list.length && tid && !list.includes(tid)) {
-            logger.debug(`Pedido ${order.id}: ignorado (tenant no en AGENT_TENANT_IDS)`, { service: 'supabase-listener' });
-            return;
-          }
+        const tid = order.tenant_id || order.lomiteria_id;
+        if (!isTenantInAgentScope(tid)) {
+          logger.debug(`Pedido ${order.id}: ignorado (tenant fuera de alcance del agente)`, { service: 'supabase-listener' });
+          return;
         }
 
         const correlationId = createCorrelationId();
@@ -1241,6 +1236,14 @@ class SupabaseRealtimeListener {
         return false;
       }
 
+      if (!isTenantInAgentScope(lomiteriaId)) {
+        logger.warn(
+          `[NO IMPRIME] Pedido #${num}: tenant no autorizado en este agente (AGENT_TENANT_IDS).`,
+          { service: 'supabase-listener' }
+        );
+        return false;
+      }
+
       const bypassAge = skipAgeCheck === true || !!reprintSolicitudId;
       if (!bypassAge && this.isAutomaticPrintBlockedByOrderAge(order)) {
         const created = order.created_at ? Date.parse(order.created_at) : NaN;
@@ -1268,6 +1271,13 @@ class SupabaseRealtimeListener {
       }
 
       const printerId = printerConfig.printer_id;
+      if (!isPrinterIdInAgentScope(printerId)) {
+        logger.warn(
+          `[NO IMPRIME] Pedido #${num}: printer_id "${printerId}" no permitido en este agente (AGENT_ALLOWED_PRINTER_IDS).`,
+          { service: 'supabase-listener' }
+        );
+        return false;
+      }
       if (!printerManager.printers.has(printerId)) {
         logger.warn(`[NO IMPRIME] Pedido #${num}: impresora "${printerId}" no está configurada en el agente`, { service: 'supabase-listener' });
         return false;

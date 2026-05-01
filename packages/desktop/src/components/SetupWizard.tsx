@@ -3,6 +3,8 @@ import { ChevronRight, ChevronLeft, Check, Printer, Settings } from 'lucide-reac
 
 interface SetupWizardProps {
   onComplete: (config: any) => void;
+  /** Si el usuario ya tenía config, puede cerrar el asistente sin guardar (volver al panel). */
+  onDismiss?: () => void;
 }
 
 type Step = 'welcome' | 'printer' | 'complete';
@@ -19,7 +21,7 @@ function normalizePrinterId(value: string): string {
     .replace(/^-|-$/g, '');
 }
 
-export default function SetupWizard({ onComplete }: SetupWizardProps) {
+export default function SetupWizard({ onComplete, onDismiss }: SetupWizardProps) {
   const [currentStep, setCurrentStep] = useState<Step>('welcome');
   const [config, setConfig] = useState({
     printerId: '',
@@ -411,6 +413,14 @@ export default function SetupWizard({ onComplete }: SetupWizardProps) {
             >
               <ChevronLeft className="h-4 w-4" />
               <span>Atrás</span>
+            </button>
+          ) : onDismiss ? (
+            <button
+              type="button"
+              onClick={onDismiss}
+              className="btn btn-secondary px-3 py-1.5 text-xs font-medium shrink-0"
+            >
+              Volver al panel
             </button>
           ) : (
             <div />

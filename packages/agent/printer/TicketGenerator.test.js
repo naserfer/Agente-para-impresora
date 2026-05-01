@@ -101,7 +101,7 @@ test('generateKitchenTicket wraps restaurant name by words to avoid mid-word spl
 
 test('generateParaguayInvoice omits fiscal labels and QR footer in non-fiscal mode', () => {
   const buffer = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     numero_factura: '001-001-0000001',
     timbrado: '12345678',
     timbrado_vigencia_inicio: '2026-01-01',
@@ -111,7 +111,7 @@ test('generateParaguayInvoice omits fiscal labels and QR footer in non-fiscal mo
     total_a_pagar: 25000,
     detalle: [{ cantidad: 1, producto_nombre: 'Lomo arabe', precio_unitario: 25000, subtotal: 25000, iva_porcentaje: 10 }],
     mesa_numero: null,
-    saludo_final: 'Gracias Oriental 8'
+    saludo_final: 'Gracias Restaurante Oriental 8'
   });
 
   const ticketText = buffer.toString('latin1').toLowerCase();
@@ -128,23 +128,23 @@ test('generateParaguayInvoice omits fiscal labels and QR footer in non-fiscal mo
 
 test('generateParaguayInvoice prints large mesa header only when mesa_numero exists', () => {
   const withMesa = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-29T01:00:00.000Z',
     numero_pedido: '901',
     total_a_pagar: 18000,
     detalle: [{ cantidad: 1, producto_nombre: 'Yakimeshi', precio_unitario: 18000, subtotal: 18000, iva_porcentaje: 10 }],
     mesa_numero: '12',
-    saludo_final: 'Gracias Oriental 8'
+    saludo_final: 'Gracias Restaurante Oriental 8'
   }).toString('latin1');
 
   const withoutMesa = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-29T01:00:00.000Z',
     numero_pedido: '902',
     total_a_pagar: 18000,
     detalle: [{ cantidad: 1, producto_nombre: 'Yakimeshi', precio_unitario: 18000, subtotal: 18000, iva_porcentaje: 10 }],
     mesa_numero: null,
-    saludo_final: 'Gracias Oriental 8'
+    saludo_final: 'Gracias Restaurante Oriental 8'
   }).toString('latin1');
 
   assert.ok(withMesa.includes('Mesa #12'));
@@ -153,7 +153,7 @@ test('generateParaguayInvoice prints large mesa header only when mesa_numero exi
 
 test('generateParaguayInvoice prints saludo_final with fallback text', () => {
   const withCustomGreeting = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-29T01:00:00.000Z',
     numero_pedido: '903',
     total_a_pagar: 18000,
@@ -162,7 +162,7 @@ test('generateParaguayInvoice prints saludo_final with fallback text', () => {
   }).toString('latin1');
 
   const withFallbackGreeting = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-29T01:00:00.000Z',
     numero_pedido: '904',
     total_a_pagar: 18000,
@@ -176,7 +176,7 @@ test('generateParaguayInvoice prints saludo_final with fallback text', () => {
 
 test('generateParaguayInvoice renders Chinese saludo_final as raster image', () => {
   const withChineseGreeting = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-29T01:00:00.000Z',
     numero_pedido: '905',
     total_a_pagar: 18000,
@@ -191,7 +191,7 @@ test('generateParaguayInvoice renders Chinese saludo_final as raster image', () 
 
 test('generateParaguayInvoice item detail omits duplicated amounts and IVA percentage', () => {
   const ticket = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-29T01:00:00.000Z',
     numero_pedido: '906',
     total_a_pagar: 99999,
@@ -205,7 +205,7 @@ test('generateParaguayInvoice item detail omits duplicated amounts and IVA perce
 
 test('generateParaguayInvoice prints total in two fixed lines to avoid printer wrapping', () => {
   const ticket = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-29T01:00:00.000Z',
     numero_pedido: '907',
     total_a_pagar: 95000,
@@ -220,7 +220,7 @@ test('generateParaguayInvoice prints total in two fixed lines to avoid printer w
 
 test('generateParaguayInvoice prints payment method for efectivo and tarjeta', () => {
   const efectivoTicket = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-30T01:00:00.000Z',
     numero_pedido: '908',
     total_a_pagar: 20000,
@@ -229,7 +229,7 @@ test('generateParaguayInvoice prints payment method for efectivo and tarjeta', (
   }).toString('latin1');
 
   const tarjetaTicket = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-30T01:00:00.000Z',
     numero_pedido: '909',
     total_a_pagar: 20000,
@@ -243,7 +243,7 @@ test('generateParaguayInvoice prints payment method for efectivo and tarjeta', (
 
 test('generateParaguayInvoice moves extra note below product without Extra/Nota labels', () => {
   const ticket = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-30T01:00:00.000Z',
     numero_pedido: '910',
     total_a_pagar: 15000,
@@ -263,7 +263,7 @@ test('generateParaguayInvoice moves extra note below product without Extra/Nota 
 
 test('generateParaguayInvoice prints base price first and extra price below', () => {
   const ticket = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-30T01:00:00.000Z',
     numero_pedido: '911',
     total_a_pagar: 15000,
@@ -284,7 +284,7 @@ test('generateParaguayInvoice prints base price first and extra price below', ()
 
 test('generateParaguayInvoice normalizes extra amount with dot thousands separator', () => {
   const ticket = TicketGenerator.generateParaguayInvoice({
-    emisor_razon_social: 'Oriental 8',
+    emisor_razon_social: 'Restaurante Oriental 8',
     fecha_emision: '2026-04-30T01:00:00.000Z',
     numero_pedido: '912',
     total_a_pagar: 15000,

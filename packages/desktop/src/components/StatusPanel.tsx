@@ -31,10 +31,22 @@ export default function StatusPanel({ agentStatus }: StatusPanelProps) {
   const isActuallyRunning = running || (health && health.status === 'ok');
   const isRealtimeConnected = isActuallyRunning && health && health.printersCount !== undefined;
 
-  // Cargar nombre del negocio
+  // CLIENT_NAME del .env sincroniza el título (evita quedar en "Oriental 8" si actualizaste el nombre en el build)
   useEffect(() => {
-    const name = localStorage.getItem('business_name') || 'Mi Negocio';
-    setBusinessName(name);
+    const run = async () => {
+      let name = localStorage.getItem('business_name') || 'Mi Negocio';
+      if (window.electronAPI?.getEnvConfig) {
+        try {
+          const result = await window.electronAPI.getEnvConfig();
+          if (result.success && result.data?.CLIENT_NAME?.trim()) {
+            name = result.data.CLIENT_NAME.trim();
+            localStorage.setItem('business_name', name);
+          }
+        } catch (_) {}
+      }
+      setBusinessName(name);
+    };
+    run();
   }, []);
 
   useEffect(() => {

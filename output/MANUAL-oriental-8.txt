@@ -2,7 +2,7 @@
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
 ║       MANUAL DE USUARIO - AGENTE DE IMPRESIÓN            ║
-║              Oriental 8                             ║
+║              Restaurante Oriental 8                 ║
 ║                                                           ║
 ╚═══════════════════════════════════════════════════════════╝
 
@@ -38,7 +38,7 @@ Paso 3: Primera ejecución
 El asistente te guiará en 3 pasos:
 
 Paso 1: Información del Negocio
-   • Nombre: Oriental 8
+   • Nombre: Restaurante Oriental 8
    • Este nombre aparecerá en los tickets
 
 Paso 2: Seleccionar Impresora
@@ -94,6 +94,6 @@ Email: soporte@lomiteria.com
 Teléfono: [AGREGAR NÚMERO]
 
 Versión del software: 1.0.1
-Cliente: Oriental 8
+Cliente: Restaurante Oriental 8
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

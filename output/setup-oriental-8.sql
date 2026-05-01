@@ -1,9 +1,9 @@
 -- ============================================
 -- ATLAS BURGER - DATOS REALES DEL MENÚ
--- Actualiza el tenant "Lomitería Don Juan" a "Oriental 8"
+-- Actualiza el tenant "Lomitería Don Juan" a "Restaurante Oriental 8"
 -- ============================================
 
--- Paso 1: Crear o actualizar el tenant Oriental 8
+-- Paso 1: Crear o actualizar el tenant Restaurante Oriental 8
 DO $$
 DECLARE
   v_tenant_id UUID;
@@ -24,7 +24,7 @@ BEGIN
     -- Si existe, solo actualizar nombre y datos
     UPDATE tenants 
     SET 
-      nombre = 'Oriental 8',
+      nombre = 'Restaurante Oriental 8',
       updated_at = NOW()
     WHERE id = v_tenant_id;
     
@@ -34,7 +34,7 @@ BEGIN
       WHERE table_name = 'tenants' AND column_name = 'ruc'
     ) THEN
       UPDATE tenants 
-      SET ruc = NULL -- TODO: Agregar RUC real de Oriental 8
+      SET ruc = NULL -- TODO: Agregar RUC real de Restaurante Oriental 8
       WHERE id = v_tenant_id;
     END IF;
   ELSE
@@ -47,7 +47,7 @@ BEGIN
       -- Usar subquery para verificar que no exista antes de actualizar
       UPDATE tenants 
       SET 
-        nombre = 'Oriental 8',
+        nombre = 'Restaurante Oriental 8',
         slug = 'oriental-8',
         updated_at = NOW()
       WHERE slug = 'lomiteria-don-juan'
@@ -58,8 +58,8 @@ BEGIN
       -- Si tampoco existe lomiteria-don-juan, crear nuevo tenant
       IF v_tenant_id IS NULL THEN
         INSERT INTO tenants (nombre, slug, telefono, email, activo)
-        VALUES ('Oriental 8', 'oriental-8', NULL, NULL, true)
-        ON CONFLICT (slug) DO UPDATE SET nombre = 'Oriental 8', updated_at = NOW()
+        VALUES ('Restaurante Oriental 8', 'oriental-8', NULL, NULL, true)
+        ON CONFLICT (slug) DO UPDATE SET nombre = 'Restaurante Oriental 8', updated_at = NOW()
         RETURNING id INTO v_tenant_id;
         
         -- Si hubo conflicto, obtener el tenant existente
@@ -77,7 +77,7 @@ BEGIN
   -- Paso 3.1: Limpiar empleados existentes (opcional, comentado para mantener datos)
   -- DELETE FROM empleados WHERE tenant_id = v_tenant_id;
 
-  -- Paso 4: Insertar categorías de Oriental 8
+  -- Paso 4: Insertar categorías de Restaurante Oriental 8
   INSERT INTO categorias (tenant_id, nombre, descripcion, orden, activa) VALUES
   (v_tenant_id, 'Burger Atlas', 'Hamburguesas Atlas', 1, true),
   (v_tenant_id, 'Smash Atlas', 'Hamburguesas Smash', 2, true),
@@ -366,7 +366,7 @@ BEGIN
   SELECT v_tenant_id, 'Carlos Rodríguez', '1122334', '+595981234569', NULL, 'repartidor', true
   WHERE NOT EXISTS (SELECT 1 FROM empleados WHERE tenant_id = v_tenant_id AND ci = '1122334');
 
-  -- Paso 8: Configurar impresora para Oriental 8
+  -- Paso 8: Configurar impresora para Restaurante Oriental 8
   -- ✅ CONFIGURACIÓN PARA SUPABASE REALTIME (SIN TÚNELES)
   -- 
   -- Con Supabase Realtime, el agente escucha cambios directamente en la tabla pedidos.
@@ -416,7 +416,7 @@ BEGIN
     activo = EXCLUDED.activo,
     updated_at = NOW();
 
-  RAISE NOTICE '✅ Configuración de impresora actualizada para Oriental 8';
+  RAISE NOTICE '✅ Configuración de impresora actualizada para Restaurante Oriental 8';
   RAISE NOTICE '   - Printer ID: %', v_printer_id;
   RAISE NOTICE '   - Tenant ID: %', v_tenant_id;
   RAISE NOTICE '';
@@ -430,7 +430,7 @@ BEGIN
   RAISE NOTICE '   3. La impresora esté configurada en el agente con printer_id: %', v_printer_id;
   RAISE NOTICE '   4. ENABLE_SUPABASE_LISTENER=true en .env del agente';
 
-  RAISE NOTICE '✅ Oriental 8: Datos insertados correctamente';
+  RAISE NOTICE '✅ Restaurante Oriental 8: Datos insertados correctamente';
   RAISE NOTICE 'Tenant ID: %', v_tenant_id;
   RAISE NOTICE 'Empleados: 2 cajeros y 1 repartidor insertados';
 END $$;
@@ -462,7 +462,7 @@ ORDER BY c.orden, p.nombre;
 -- ============================================
 -- 
 -- Este script:
--- 1. ✅ Actualiza el tenant "Lomitería Don Juan" a "Oriental 8"
+-- 1. ✅ Actualiza el tenant "Lomitería Don Juan" a "Restaurante Oriental 8"
 -- 2. ✅ Elimina productos y categorías antiguas
 -- 3. ✅ Inserta todas las categorías del menú real
 -- 4. ✅ Inserta todos los productos con precios en Guaraníes (GS)

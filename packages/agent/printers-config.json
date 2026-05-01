@@ -1,32 +1,8 @@
 {
-  "atlas-burger-printer-1": {
-    "printerId": "atlas-burger-printer-1",
-    "type": "usb",
-    "printerName": "EPSON TM-T20III Receipt",
-    "port": "USB"
-  },
-  "lomiteria-10794121-printer-1": {
-    "printerId": "lomiteria-10794121-printer-1",
-    "type": "usb",
-    "printerName": "EPSON TM-T20III Receipt",
-    "port": "USB"
-  },
-  "pancholos-printer-1": {
-    "printerId": "pancholos-printer-1",
-    "type": "usb",
-    "printerName": "EPSON TM-T20III Receipt",
-    "port": "USB"
-  },
-  "pancholo-printer-1": {
-    "printerId": "pancholo-printer-1",
-    "type": "usb",
-    "printerName": "EPSON TM-T20III Receipt",
-    "port": "USB"
-  },
   "prn-565c0876": {
     "printerId": "prn-565c0876",
     "type": "usb",
     "printerName": "EPSON TM-T20III Receipt",
-    "port": 9100
+    "port": "USB"
   }
 }

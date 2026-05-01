@@ -57,6 +57,7 @@ const express = require('express');
 const cors = require('cors');
 const config = require('./config');
 const logger = require('./logger');
+const { isPrinterIdInAgentScope } = require('./agent-scope');
 const printerManager = require('./printer/PrinterManager');
 const TicketGenerator = require('./printer/TicketGenerator');
 const { getHttpLogLevel } = require('./http-request-logging');
@@ -84,6 +85,18 @@ if (typeof global !== 'undefined') {
 function isInvoicePrintingEnabled(env = process.env) {
   const raw = env.ENABLE_INVOICE_PRINTING ?? env.ENABLE_FACTURA_PRINTING ?? 'false';
   return String(raw).toLowerCase() === 'true';
+}
+
+/** true = respuesta 403 ya enviada */
+function rejectPrinterOutOfAgentScope(res, printerId) {
+  if (!isPrinterIdInAgentScope(printerId)) {
+    res.status(403).json({
+      error: 'printerId no permitido en este agente',
+      detail: 'Revisá AGENT_ALLOWED_PRINTER_IDS en el .env del agente.'
+    });
+    return true;
+  }
+  return false;
 }
 
 // Manejo de errores no capturados para debugging
@@ -315,6 +328,8 @@ app.get('/health', (req, res) => {
 app.get('/api/printer/status/:printerId', async (req, res) => {
   try {
     const { printerId } = req.params;
+    if (rejectPrinterOutOfAgentScope(res, printerId)) return;
+
     const printerConfig = printerManager.printers.get(printerId);
 
     if (!printerConfig) {
@@ -359,6 +374,8 @@ app.get('/api/printer/status/:printerId', async (req, res) => {
 app.post('/api/printer/test/:printerId', async (req, res) => {
   try {
     const { printerId } = req.params;
+    if (rejectPrinterOutOfAgentScope(res, printerId)) return;
+
     const printerConfig = printerManager.printers.get(printerId);
 
     if (!printerConfig) {
@@ -403,6 +420,7 @@ app.post('/api/printer/configure', async (req, res) => {
     if (!printerId) {
       return res.status(400).json({ error: 'printerId es requerido' });
     }
+    if (rejectPrinterOutOfAgentScope(res, printerId)) return;
 
     // Preparar la configuración de la impresora
     const printerConfig = {
@@ -518,6 +536,7 @@ app.post('/print', async (req, res) => {
     if (!printerId) {
       return res.status(400).json({ error: 'printerId es requerido' });
     }
+    if (rejectPrinterOutOfAgentScope(res, printerId)) return;
 
     // Validar que se envió el tipo
     if (!tipo) {
@@ -618,6 +637,7 @@ app.post('/api/print/kitchen-ticket', async (req, res) => {
     if (!printerId || !orderData) {
       return res.status(400).json({ error: 'printerId y orderData son requeridos' });
     }
+    if (rejectPrinterOutOfAgentScope(res, printerId)) return;
     const ticketBuffer = TicketGenerator.generateKitchenTicket(orderData);
     await printerManager.print(printerId, ticketBuffer);
     logger.info(`Ticket de cocina impreso (endpoint legacy): Orden #${orderData.orderId}`, { printerId });
@@ -643,6 +663,7 @@ app.post('/api/print/invoice', async (req, res) => {
     if (!printerId || !invoiceData) {
       return res.status(400).json({ error: 'printerId y invoiceData son requeridos' });
     }
+    if (rejectPrinterOutOfAgentScope(res, printerId)) return;
     const invoiceBuffer = TicketGenerator.generateInvoice(invoiceData);
     await printerManager.print(printerId, invoiceBuffer);
     logger.info(`Factura impresa (endpoint legacy): #${invoiceData.invoiceNumber}`, { printerId });
@@ -665,6 +686,7 @@ app.post('/api/print/text', async (req, res) => {
     if (!printerId) {
       return res.status(400).json({ error: 'printerId es requerido' });
     }
+    if (rejectPrinterOutOfAgentScope(res, printerId)) return;
 
     if (!text) {
       return res.status(400).json({ error: 'text es requerido' });

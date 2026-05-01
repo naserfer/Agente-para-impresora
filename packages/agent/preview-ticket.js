@@ -2,7 +2,7 @@ const TicketGenerator = require('./printer/TicketGenerator');
 
 // Datos de ejemplo para probar el ticket
 const orderData = {
-  lomiteriaName: 'Atlas Burger',
+  lomiteriaName: 'Restaurante Oriental 8',
   orderType: 'delivery',
   orderId: '152',
   createdAt: new Date().toISOString(),

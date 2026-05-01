@@ -43,39 +43,47 @@ export default function ClientDashboard({ agentStatus }: ClientDashboardProps) {
   const isActuallyRunning = running || (health && health.status === 'ok');
   const isRealtimeConnected = isActuallyRunning && health && health.printersCount !== undefined;
 
-  // Cargar nombre del negocio y configuración de impresora
+  // Cargar nombre del negocio y configuración de impresora (CLIENT_NAME del .env gana sobre localStorage viejo)
   useEffect(() => {
-    const name = localStorage.getItem('business_name') || 'Mi Negocio';
-    setBusinessName(name);
-    
-    // Cargar printerId desde localStorage
-    const savedPrinterId = localStorage.getItem('printer_id');
-    const savedPrinterName = localStorage.getItem('printer_name');
-    
-    if (savedPrinterId) {
-      setPrinterId(normalizePrinterId(savedPrinterId));
-    } else if (name) {
-      // Generar printerId por defecto basado en business name
-      const defaultId = normalizePrinterId(`${name}-printer-1`);
-      setPrinterId(defaultId);
-    } else {
-      setPrinterId('atlas-burger-printer-1');
-    }
-    
-    if (savedPrinterName) {
-      setPrinterName(savedPrinterName);
-    }
-    
-    // Intentar cargar desde .env si no hay en localStorage
-    if (!savedPrinterId && window.electronAPI?.getEnvConfig) {
-      window.electronAPI.getEnvConfig().then((result) => {
-        if (result.success && result.data?.PRINTER_ID) {
-          setPrinterId(normalizePrinterId(result.data.PRINTER_ID));
-        }
-      }).catch(() => {
-        // Ignorar errores
-      });
-    }
+    const run = async () => {
+      let name = localStorage.getItem('business_name') || 'Mi Negocio';
+      if (window.electronAPI?.getEnvConfig) {
+        try {
+          const result = await window.electronAPI.getEnvConfig();
+          if (result.success && result.data?.CLIENT_NAME?.trim()) {
+            name = result.data.CLIENT_NAME.trim();
+            localStorage.setItem('business_name', name);
+          }
+        } catch (_) {}
+      }
+      setBusinessName(name);
+
+      const savedPrinterId = localStorage.getItem('printer_id');
+      const savedPrinterName = localStorage.getItem('printer_name');
+
+      if (savedPrinterId) {
+        setPrinterId(normalizePrinterId(savedPrinterId));
+      } else if (name && name !== 'Mi Negocio') {
+        const defaultId = normalizePrinterId(`${name}-printer-1`);
+        setPrinterId(defaultId);
+      } else {
+        setPrinterId('');
+      }
+
+      if (savedPrinterName) {
+        setPrinterName(savedPrinterName);
+      }
+
+      if (!savedPrinterId && window.electronAPI?.getEnvConfig) {
+        try {
+          const result = await window.electronAPI.getEnvConfig();
+          if (result.success && result.data?.PRINTER_ID) {
+            setPrinterId(normalizePrinterId(result.data.PRINTER_ID));
+          }
+        } catch (_) {}
+      }
+    };
+    run();
   }, []);
 
   // Cargar datos

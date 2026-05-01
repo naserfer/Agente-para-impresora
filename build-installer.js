@@ -108,12 +108,19 @@ function generateSQL(config) {
 function generateEnv(config) {
   info('Generando archivo .env...');
 
-  const envContent = `# Configuración del Agente - ${config.cliente.nombre}
+  const clientDisplayName = String(config.cliente.nombre || '')
+    .replace(/\r?\n/g, ' ')
+    .trim();
+
+  let envContent = `# Configuración del Agente - ${config.cliente.nombre}
 # Generado automáticamente - BLOQUEADO EN BUILD
 # No exponer ni editar credenciales en el cliente final
 
 # Identificador de instalación (sirve para detectar cambios de build por usuario Windows)
 AGENT_INSTALL_ID=${config.cliente.slug}
+
+# Nombre del negocio en la app y tickets (desde cliente-config; el asistente sigue pidiendo impresora si no hay PRINTER_* en userData)
+CLIENT_NAME=${clientDisplayName}
 
 # Conexión a Supabase
 SUPABASE_URL=${config.supabase.url}
@@ -143,7 +150,22 @@ WINDOWS_SPOOL_FAST_PATH_TIMEOUT_MS=1200
 # NO usar túneles con Supabase Realtime
 # NO usar túneles con Supabase Realtime
 AUTO_TUNNEL=false
+`;
 
+  const tenantIds =
+    (config.avanzado && config.avanzado.agentTenantIds) ||
+    (config.cliente && config.cliente.tenantId) ||
+    '';
+  if (tenantIds && String(tenantIds).trim()) {
+    envContent += `
+# Aislamiento multi-tenant: solo esta lomitería (UUID; varios separados por coma)
+AGENT_TENANT_IDS=${String(tenantIds).trim()}
+# Solo este printer_id puede imprimir (Realtime + HTTP)
+AGENT_ALLOWED_PRINTER_IDS=${String(config.impresora.printerId || '').trim()}
+`;
+  }
+
+  envContent += `
 # Configuración local editable en runtime (wizard)
 # PRINTER_ID y CLIENT_NAME se guardan localmente por instalación
 `;

@@ -57,7 +57,7 @@ test('customer points for sale prefers explicit puntos_generados', () => {
   assert.equal(listener.getCustomerWelcomePointsForSale({}), 0);
 });
 
-test('Oriental 8 no-mesa flow detection is tenant-specific', () => {
+test('Restaurante Oriental 8 no-mesa flow detection is tenant-specific', () => {
   assert.equal(
     listener.isOriental8NoMesaFlow({ tenant_id: '565c0876-2235-4e7c-bb54-89c466fe4583', mesa_id: null }),
     true
@@ -226,11 +226,13 @@ test('reprint_solicitud tipo cocina triggers kitchenOnly print', async () => {
   const originalSupabase = listener.supabase;
   const originalPrintOrder = listener.printOrder;
   const originalTenantFilter = process.env.AGENT_TENANT_IDS;
+  const originalPrinterFilter = process.env.AGENT_ALLOWED_PRINTER_IDS;
   const rowId = 'reprint-cocina-1';
   const calls = [];
 
   try {
     delete process.env.AGENT_TENANT_IDS;
+    delete process.env.AGENT_ALLOWED_PRINTER_IDS;
     listener.processedReprintIds.delete(rowId);
     listener.supabase = {
       from() {
@@ -263,6 +265,7 @@ test('reprint_solicitud tipo cocina triggers kitchenOnly print', async () => {
     assert.equal(calls[0].invoiceOnly || false, false);
   } finally {
     process.env.AGENT_TENANT_IDS = originalTenantFilter;
+    process.env.AGENT_ALLOWED_PRINTER_IDS = originalPrinterFilter;
     listener.supabase = originalSupabase;
     listener.printOrder = originalPrintOrder;
     listener.processedReprintIds.delete(rowId);
@@ -273,11 +276,13 @@ test('reprint_solicitud tipo factura triggers invoiceOnly print', async () => {
   const originalSupabase = listener.supabase;
   const originalPrintOrder = listener.printOrder;
   const originalTenantFilter = process.env.AGENT_TENANT_IDS;
+  const originalPrinterFilter = process.env.AGENT_ALLOWED_PRINTER_IDS;
   const rowId = 'reprint-factura-1';
   const calls = [];
 
   try {
     delete process.env.AGENT_TENANT_IDS;
+    delete process.env.AGENT_ALLOWED_PRINTER_IDS;
     listener.processedReprintIds.delete(rowId);
     listener.supabase = {
       from() {
@@ -310,6 +315,7 @@ test('reprint_solicitud tipo factura triggers invoiceOnly print', async () => {
     assert.equal(calls[0].kitchenOnly || false, false);
   } finally {
     process.env.AGENT_TENANT_IDS = originalTenantFilter;
+    process.env.AGENT_ALLOWED_PRINTER_IDS = originalPrinterFilter;
     listener.supabase = originalSupabase;
     listener.printOrder = originalPrintOrder;
     listener.processedReprintIds.delete(rowId);
